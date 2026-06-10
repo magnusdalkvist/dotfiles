@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+SESSION="${1:-main}"
+
+# Attach if session already exists
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux attach-session -t "$SESSION"
+    exit
+fi
+
+# Create session and split: left clock (~55%), right shell (~45%)
+tmux new-session -d -s "$SESSION"
+tmux split-window -h -p 45 -t "$SESSION"
+
+# Left pane: persistent clock
+tmux send-keys -t "$SESSION:0.0" "tmux-clock" Enter
+
+# Focus right pane
+tmux select-pane -t "$SESSION:0.1"
+
+tmux attach-session -t "$SESSION"

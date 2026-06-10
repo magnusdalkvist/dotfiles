@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Keeps tmux clock mode active — re-enters immediately if dismissed
+trap '' INT
+while true; do
+    tmux clock-mode -t "$TMUX_PANE"
+    sleep 0.05
+done
