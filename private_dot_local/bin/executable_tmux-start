@@ -1,26 +1,40 @@
 #!/usr/bin/env bash
-SESSION="${1:-main}"
 
-# Attach if session already exists
-if tmux has-session -t "$SESSION" 2>/dev/null; then
-    tmux attach-session -t "$SESSION"
-    exit
+if [[ -n "$TMUX" ]]; then
+    BASE="${1:-main}"
+    SESSION="$BASE"
+    i=2
+    while tmux has-session -t "$SESSION" 2>/dev/null; do
+        SESSION="${BASE}-${i}"
+        ((i++))
+    done
+else
+    SESSION="${1:-main}"
+    if tmux has-session -t "$SESSION" 2>/dev/null; then
+        tmux attach-session -t "$SESSION"
+        exit
+    fi
 fi
 
-# Create session and split left/right (~55% left, ~45% right)
 tmux new-session -d -s "$SESSION"
-tmux split-window -h -p 45 -t "$SESSION"
+# Capture stable pane ids — tmux renumbers pane *indices* after each split,
+# so we track %ids instead of 0.0/0.2/etc.
+LEFT=$(tmux display-message -p -t "$SESSION:0.0" '#{pane_id}')
+# Right column (50%): terminal
+RIGHT=$(tmux split-window -h -p 50 -t "$LEFT" -P -F '#{pane_id}')
+# Left column: clock (top 25%), then split the lower 75% into overview + claude
+MID=$(tmux split-window -v -p 75 -t "$LEFT" -P -F '#{pane_id}')
+# overview = 1/3 of that 75% (≈25% total), claude = 2/3 (≈50% total)
+CLAUDE=$(tmux split-window -v -p 67 -t "$MID" -P -F '#{pane_id}')
 
-# Split left pane top/bottom (~40% clock, ~60% claude)
-tmux split-window -v -p 60 -t "$SESSION:0.0"
+tmux send-keys -t "$LEFT" "tmux-clock" Enter
+tmux send-keys -t "$MID" "tmux-session-overview" Enter
+tmux send-keys -t "$CLAUDE" "claude" Enter
 
-# Left top (pane 0): persistent clock
-tmux send-keys -t "$SESSION:0.0" "tmux-clock" Enter
+tmux select-pane -t "$CLAUDE"
 
-# Left bottom (pane 1): claude
-tmux send-keys -t "$SESSION:0.1" "claude" Enter
-
-# Focus right pane (pane 2)
-tmux select-pane -t "$SESSION:0.2"
-
-tmux attach-session -t "$SESSION"
+if [[ -n "$TMUX" ]]; then
+    tmux switch-client -t "$SESSION"
+else
+    tmux attach-session -t "$SESSION"
+fi

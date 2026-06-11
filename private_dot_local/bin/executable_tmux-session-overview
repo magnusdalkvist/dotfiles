@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+
+PINK=$'\033[38;2;255;80;115m'
+GRAY=$'\033[38;2;136;136;136m'
+GREEN=$'\033[38;2;80;220;100m'
+YELLOW=$'\033[38;2;255;200;80m'
+WHITE=$'\033[38;2;210;210;210m'
+BOLD=$'\033[1m'
+RESET=$'\033[0m'
+
+detect_claude_state() {
+    local target="$1"
+    local content
+    content=$(tmux capture-pane -p -t "$target" 2>/dev/null | tail -12)
+    if echo "$content" | grep -qiE 'esc to cancel|tab to amend'; then
+        echo "question"
+    elif echo "$content" | grep -qi 'esc to interrupt'; then
+        echo "working"
+    elif echo "$content" | grep -qE '^\s*>\s*$'; then
+        echo "ready"
+    else
+        echo "active"
+    fi
+}
+
+CLR_EOL=$'\033[K'
+
+# Hide cursor while redrawing; restore it (and clear) on exit.
+cleanup() { printf '\033[?25h\033[2J\033[H'; }
+trap cleanup EXIT INT TERM
+printf '\033[?25l\033[2J'
+
+while true; do
+    current_session=$(tmux display-message -p '#S' 2>/dev/null)
+    current_window=$(tmux display-message -p '#{window_index}' 2>/dev/null)
+
+    frame=$(
+        printf "${BOLD}${PINK}  sessions${RESET}  ${GRAY}$(date '+%H:%M:%S')${RESET}\n\n"
+
+        while IFS=: read -r sname swindows sattached; do
+            if [[ "$sname" == "$current_session" ]]; then
+                printf " ${PINK}▶ ${BOLD}${sname}${RESET}  ${GRAY}${swindows}w${RESET}\n"
+            else
+                printf "   ${BOLD}${WHITE}${sname}${RESET}  ${GRAY}${swindows}w${RESET}\n"
+            fi
+
+            while IFS=: read -r widx wname wactive wpanes; do
+                printf "    ${WHITE}[%s] %s${RESET}\n" "$widx" "$wname"
+
+                while IFS=: read -r pidx pcmd pactive; do
+                    target="${sname}:${widx}.${pidx}"
+                    if [[ "$pcmd" == *"claude"* ]] || [[ "$pcmd" == "node" ]]; then
+                        state=$(detect_claude_state "$target")
+                        case "$state" in
+                            question)
+                                printf "        ${PINK}${BOLD}❓ %s  [needs answer]${RESET}\n" "$pcmd"
+                                ;;
+                            working)
+                                printf "        ${YELLOW}⚙  %s  [working...]${RESET}\n" "$pcmd"
+                                ;;
+                            ready)
+                                printf "        ${GREEN}●  %s  [ready]${RESET}\n" "$pcmd"
+                                ;;
+                            *)
+                                printf "        ${GRAY}○  %s${RESET}\n" "$pcmd"
+                                ;;
+                        esac
+                    else
+                        if [[ "$pactive" == "1" ]]; then
+                            printf "        ${WHITE}○  %s${RESET}\n" "$pcmd"
+                        else
+                            printf "        ${GRAY}○  %s${RESET}\n" "$pcmd"
+                        fi
+                    fi
+                done < <(tmux list-panes -t "${sname}:${widx}" \
+                    -F "#{pane_index}:#{pane_current_command}:#{pane_active}" 2>/dev/null)
+
+            done < <(tmux list-windows -t "$sname" \
+                -F "#{window_index}:#{window_name}:#{window_active}:#{window_panes}" 2>/dev/null)
+
+            printf "\n"
+        done < <(tmux list-sessions \
+            -F "#{session_name}:#{session_windows}:#{session_attached}" 2>/dev/null)
+    )
+
+    # Redraw in place: home cursor, clear each line as we overwrite it,
+    # then clear anything left below from a previous, taller frame.
+    printf '\033[H%s%s\033[J' "${frame//$'\n'/$CLR_EOL$'\n'}" "$CLR_EOL"
+
+    sleep 2
+done

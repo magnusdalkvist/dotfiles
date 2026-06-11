@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Keeps tmux clock mode active — re-enters immediately if dismissed
+SESSION=$(tmux display-message -p '#S')
+FLAGFILE="/tmp/tmux-clock-${SESSION}"
+touch "$FLAGFILE"
+trap 'rm -f "$FLAGFILE"' EXIT
 trap '' INT
-while true; do
+while [[ -f "$FLAGFILE" ]]; do
     tmux clock-mode -t "$TMUX_PANE"
     sleep 0.05
 done
