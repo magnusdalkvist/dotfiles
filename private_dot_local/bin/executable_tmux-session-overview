@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+shopt -s extglob
+
 PINK=$'\033[38;2;255;80;115m'
 GRAY=$'\033[38;2;136;136;136m'
 GREEN=$'\033[38;2;80;220;100m'
@@ -8,6 +10,10 @@ BLUE=$'\033[38;2;90;160;255m'
 WHITE=$'\033[38;2;210;210;210m'
 BOLD=$'\033[1m'
 RESET=$'\033[0m'
+ESC=$'\033'
+
+COLW=22       # visible width of each window column
+GUTTER="  "
 
 detect_claude_state() {
     local target="$1"
@@ -24,28 +30,25 @@ detect_claude_state() {
     fi
 }
 
-# State of the first claude pane in a window, or "none".
-window_claude() {
-    local sname="$1" widx="$2" pidx pcmd
-    while IFS=: read -r pidx pcmd; do
-        if [[ "$pcmd" == *claude* ]] || [[ "$pcmd" == "node" ]]; then
-            detect_claude_state "${sname}:${widx}.${pidx}"
-            return
-        fi
-    done < <(tmux list-panes -t "${sname}:${widx}" \
-        -F "#{pane_index}:#{pane_current_command}" 2>/dev/null)
-    echo "none"
+# Coloured one-line cell for a pane.
+pane_cell() {
+    local sname="$1" widx="$2" pidx="$3" pcmd="$4"
+    if [[ "$pcmd" == *claude* ]] || [[ "$pcmd" == "node" ]]; then
+        case "$(detect_claude_state "${sname}:${widx}.${pidx}")" in
+            question) printf "${BLUE}${BOLD}claude ● needs answer${RESET}" ;;
+            working)  printf "${YELLOW}claude ⚙ working${RESET}" ;;
+            ready)    printf "${GREEN}claude ● ready${RESET}" ;;
+            *)        printf "${GRAY}claude ○${RESET}" ;;
+        esac
+    else
+        printf "${GRAY}○ %s${RESET}" "$pcmd"
+    fi
 }
 
-# Coloured claude-status token for a window (empty if no claude pane).
-status_token() {
-    case "$1" in
-        question) printf "${BLUE}${BOLD}● needs answer${RESET}" ;;
-        working)  printf "${YELLOW}⚙ working${RESET}" ;;
-        ready)    printf "${GREEN}● ready${RESET}" ;;
-        active)   printf "${GRAY}○ claude${RESET}" ;;
-        *)        printf "" ;;
-    esac
+# Visible length of a string, ignoring ANSI colour codes.
+vislen() {
+    local stripped=${1//${ESC}\[*([0-9;])m/}
+    printf '%s' "${#stripped}"
 }
 
 CLR_EOL=$'\033[K'
@@ -65,24 +68,39 @@ while true; do
 
         while IFS=: read -r sname swindows; do
             if [[ "$sname" == "$current_session" ]]; then
-                printf " ${PINK}▶ ${BOLD}%s${RESET}  " "$sname"
+                printf " ${PINK}▶ ${BOLD}%s${RESET}\n" "$sname"
             else
-                printf "   ${BOLD}${WHITE}%s${RESET}  " "$sname"
+                printf "   ${BOLD}${WHITE}%s${RESET}\n" "$sname"
             fi
 
-            # Windows flow horizontally on the session's row.
-            while IFS=: read -r widx wname wpanes; do
-                tok=$(status_token "$(window_claude "$sname" "$widx")")
-                if [[ -n "$tok" ]]; then
-                    printf "${GRAY}[%s]${RESET} ${WHITE}%s${RESET} ${GRAY}%sp${RESET} %s    " \
-                        "$widx" "$wname" "$wpanes" "$tok"
-                else
-                    printf "${GRAY}[%s]${RESET} ${WHITE}%s${RESET} ${GRAY}%sp${RESET}    " \
-                        "$widx" "$wname" "$wpanes"
-                fi
+            # Build each window as a column (lines joined by \x01), then print
+            # the columns side by side so windows read left-to-right with their
+            # panes stacked underneath.
+            cols=()
+            maxrows=0
+            while IFS=: read -r widx wname; do
+                block="${BOLD}${WHITE}[${widx}] ${wname}${RESET}"
+                while IFS=: read -r pidx pcmd; do
+                    block+=$'\x01'"  $(pane_cell "$sname" "$widx" "$pidx" "$pcmd")"
+                done < <(tmux list-panes -t "${sname}:${widx}" \
+                    -F "#{pane_index}:#{pane_current_command}" 2>/dev/null)
+                cols+=("$block")
+                IFS=$'\x01' read -ra _lines <<< "$block"
+                (( ${#_lines[@]} > maxrows )) && maxrows=${#_lines[@]}
             done < <(tmux list-windows -t "$sname" \
-                -F "#{window_index}:#{window_name}:#{window_panes}" 2>/dev/null)
+                -F "#{window_index}:#{window_name}" 2>/dev/null)
 
+            for (( r = 0; r < maxrows; r++ )); do
+                printf "   "
+                for block in "${cols[@]}"; do
+                    IFS=$'\x01' read -ra lines <<< "$block"
+                    cell="${lines[r]:-}"
+                    pad=$(( COLW - $(vislen "$cell") ))
+                    (( pad < 0 )) && pad=0
+                    printf '%s%*s%s' "$cell" "$pad" "" "$GUTTER"
+                done
+                printf "\n"
+            done
             printf "\n"
         done < <(tmux list-sessions -F "#{session_name}:#{session_windows}" 2>/dev/null)
     )

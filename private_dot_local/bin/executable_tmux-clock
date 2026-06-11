@@ -1,10 +1,62 @@
 #!/usr/bin/env bash
-SESSION=$(tmux display-message -p '#S')
+# Self-rendered big clock. Cancellable with Ctrl+C (normal SIGINT) — unlike
+# tmux's clock-mode, which captures keystrokes and ignores the clock key-table.
+# The flag file lets tmux-clock-toggle stop it externally.
+
+PINK=$'\033[38;2;255;80;115m'
+RESET=$'\033[0m'
+CLR_EOL=$'\033[K'
+
+SESSION=$(tmux display-message -p '#S' 2>/dev/null)
 FLAGFILE="/tmp/tmux-clock-${SESSION}"
 touch "$FLAGFILE"
-trap 'rm -f "$FLAGFILE"' EXIT
+
+cleanup() { rm -f "$FLAGFILE"; printf '\033[?25h\033[2J\033[H'; }
+trap cleanup EXIT
 trap 'exit 0' INT TERM
+printf '\033[?25l\033[2J'
+
+# 5-row block glyphs into global array G.
+glyph() {
+    case "$1" in
+        0) G=("█████" "█   █" "█   █" "█   █" "█████");;
+        1) G=("    █" "    █" "    █" "    █" "    █");;
+        2) G=("█████" "    █" "█████" "█    " "█████");;
+        3) G=("█████" "    █" "█████" "    █" "█████");;
+        4) G=("█   █" "█   █" "█████" "    █" "    █");;
+        5) G=("█████" "█    " "█████" "    █" "█████");;
+        6) G=("█████" "█    " "█████" "█   █" "█████");;
+        7) G=("█████" "    █" "    █" "    █" "    █");;
+        8) G=("█████" "█   █" "█████" "█   █" "█████");;
+        9) G=("█████" "█   █" "█████" "    █" "█████");;
+        :) G=("   " " █ " "   " " █ " "   ");;
+        *) G=("     " "     " "     " "     " "     ");;
+    esac
+}
+
 while [[ -f "$FLAGFILE" ]]; do
-    tmux clock-mode -t "$TMUX_PANE"
-    sleep 0.05
+    cols=$(tmux display -p -t "$TMUX_PANE" '#{pane_width}' 2>/dev/null)
+    rows=$(tmux display -p -t "$TMUX_PANE" '#{pane_height}' 2>/dev/null)
+    timestr=$(date '+%H:%M')
+
+    r=("" "" "" "" "")
+    for (( i = 0; i < ${#timestr}; i++ )); do
+        glyph "${timestr:i:1}"
+        for (( l = 0; l < 5; l++ )); do r[l]+="${G[l]} "; done
+    done
+
+    w=${#r[0]}
+    leftpad=$(( (cols - w) / 2 )); (( leftpad < 0 )) && leftpad=0
+    toppad=$(( (rows - 5) / 2 )); (( toppad < 0 )) && toppad=0
+    pad=$(printf '%*s' "$leftpad" "")
+
+    out=""
+    for (( t = 0; t < toppad; t++ )); do out+=$'\n'; done
+    for (( l = 0; l < 5; l++ )); do
+        out+="${pad}${PINK}${r[l]}${RESET}"
+        (( l < 4 )) && out+=$'\n'
+    done
+
+    printf '\033[H%s%s\033[J' "${out//$'\n'/$CLR_EOL$'\n'}" "$CLR_EOL"
+    sleep 1
 done
