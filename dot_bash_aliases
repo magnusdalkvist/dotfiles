@@ -1,0 +1,9 @@
+# Claude
+alias cc='claude'
+
+# Navigation
+alias ..='cd ..'
+alias ...='cd ../..'
+
+# Editor
+alias v='nvim'
