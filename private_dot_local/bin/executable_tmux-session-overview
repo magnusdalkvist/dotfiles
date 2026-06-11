@@ -4,6 +4,7 @@ PINK=$'\033[38;2;255;80;115m'
 GRAY=$'\033[38;2;136;136;136m'
 GREEN=$'\033[38;2;80;220;100m'
 YELLOW=$'\033[38;2;255;200;80m'
+BLUE=$'\033[38;2;90;160;255m'
 WHITE=$'\033[38;2;210;210;210m'
 BOLD=$'\033[1m'
 RESET=$'\033[0m'
@@ -16,7 +17,7 @@ detect_claude_state() {
         echo "question"
     elif echo "$content" | grep -qi 'esc to interrupt'; then
         echo "working"
-    elif echo "$content" | grep -qE '^\s*>\s*$'; then
+    elif echo "$content" | grep -qi 'for shortcuts'; then
         echo "ready"
     else
         echo "active"
@@ -39,7 +40,7 @@ window_claude() {
 # Coloured claude-status token for a window (empty if no claude pane).
 status_token() {
     case "$1" in
-        question) printf "${PINK}${BOLD}❓ needs answer${RESET}" ;;
+        question) printf "${BLUE}${BOLD}● needs answer${RESET}" ;;
         working)  printf "${YELLOW}⚙ working${RESET}" ;;
         ready)    printf "${GREEN}● ready${RESET}" ;;
         active)   printf "${GRAY}○ claude${RESET}" ;;
@@ -50,8 +51,10 @@ status_token() {
 CLR_EOL=$'\033[K'
 
 # Hide cursor while redrawing; restore it (and clear) on exit.
+# Ctrl+C / SIGTERM exit, which fires the EXIT trap to restore the terminal.
 cleanup() { printf '\033[?25h\033[2J\033[H'; }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 0' INT TERM
 printf '\033[?25l\033[2J'
 
 while true; do
@@ -88,5 +91,5 @@ while true; do
     # then clear anything left below from a previous, taller frame.
     printf '\033[H%s%s\033[J' "${frame//$'\n'/$CLR_EOL$'\n'}" "$CLR_EOL"
 
-    sleep 2
+    sleep 1
 done

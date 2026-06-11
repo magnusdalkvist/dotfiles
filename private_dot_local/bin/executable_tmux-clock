@@ -3,7 +3,7 @@ SESSION=$(tmux display-message -p '#S')
 FLAGFILE="/tmp/tmux-clock-${SESSION}"
 touch "$FLAGFILE"
 trap 'rm -f "$FLAGFILE"' EXIT
-trap '' INT
+trap 'exit 0' INT TERM
 while [[ -f "$FLAGFILE" ]]; do
     tmux clock-mode -t "$TMUX_PANE"
     sleep 0.05
