@@ -30,11 +30,11 @@ tmux new-session -d -s "$SESSION" -x "${COLS:-200}" -y "${ROWS:-50}"
 # so we track %ids instead of 0.0/0.2/etc.
 LEFT_TOP=$(tmux display-message -p -t "$SESSION:0.0" '#{pane_id}')
 # Right column (50%)
-RIGHT_TOP=$(tmux split-window -h -p 50 -t "$LEFT_TOP" -P -F '#{pane_id}')
+RIGHT_TOP=$(tmux split-window -h -l 50% -t "$LEFT_TOP" -P -F '#{pane_id}')
 # Left column: overview (top), claude (bottom)
-LEFT_BOT=$(tmux split-window -v -p 80 -t "$LEFT_TOP" -P -F '#{pane_id}')
+LEFT_BOT=$(tmux split-window -v -l 80% -t "$LEFT_TOP" -P -F '#{pane_id}')
 # Right column: clock (top), terminal (bottom)
-RIGHT_BOT=$(tmux split-window -v -p 80 -t "$RIGHT_TOP" -P -F '#{pane_id}')
+RIGHT_BOT=$(tmux split-window -v -l 80% -t "$RIGHT_TOP" -P -F '#{pane_id}')
 
 # Pin the overview and clock panes to exactly 8 lines tall.
 tmux resize-pane -t "$LEFT_TOP" -y 8
