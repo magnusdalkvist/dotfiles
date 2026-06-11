@@ -7,14 +7,20 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
     exit
 fi
 
-# Create session and split: left clock (~55%), right shell (~45%)
+# Create session and split left/right (~55% left, ~45% right)
 tmux new-session -d -s "$SESSION"
 tmux split-window -h -p 45 -t "$SESSION"
 
-# Left pane: persistent clock
+# Split left pane top/bottom (~40% clock, ~60% claude)
+tmux split-window -v -p 60 -t "$SESSION:0.0"
+
+# Left top (pane 0): persistent clock
 tmux send-keys -t "$SESSION:0.0" "tmux-clock" Enter
 
-# Focus right pane
-tmux select-pane -t "$SESSION:0.1"
+# Left bottom (pane 1): claude
+tmux send-keys -t "$SESSION:0.1" "claude" Enter
+
+# Focus right pane (pane 2)
+tmux select-pane -t "$SESSION:0.2"
 
 tmux attach-session -t "$SESSION"
