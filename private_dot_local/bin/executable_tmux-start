@@ -19,19 +19,20 @@ fi
 tmux new-session -d -s "$SESSION"
 # Capture stable pane ids — tmux renumbers pane *indices* after each split,
 # so we track %ids instead of 0.0/0.2/etc.
-LEFT=$(tmux display-message -p -t "$SESSION:0.0" '#{pane_id}')
-# Right column (50%): terminal
-RIGHT=$(tmux split-window -h -p 50 -t "$LEFT" -P -F '#{pane_id}')
-# Left column: clock (top 25%), then split the lower 75% into overview + claude
-MID=$(tmux split-window -v -p 75 -t "$LEFT" -P -F '#{pane_id}')
-# overview = 1/3 of that 75% (≈25% total), claude = 2/3 (≈50% total)
-CLAUDE=$(tmux split-window -v -p 67 -t "$MID" -P -F '#{pane_id}')
+LEFT_TOP=$(tmux display-message -p -t "$SESSION:0.0" '#{pane_id}')
+# Right column (50%)
+RIGHT_TOP=$(tmux split-window -h -p 50 -t "$LEFT_TOP" -P -F '#{pane_id}')
+# Left column: overview (top 20%), claude (bottom 80%)
+LEFT_BOT=$(tmux split-window -v -p 80 -t "$LEFT_TOP" -P -F '#{pane_id}')
+# Right column: clock (top 20%), terminal (bottom 80%)
+RIGHT_BOT=$(tmux split-window -v -p 80 -t "$RIGHT_TOP" -P -F '#{pane_id}')
 
-tmux send-keys -t "$LEFT" "tmux-clock" Enter
-tmux send-keys -t "$MID" "tmux-session-overview" Enter
-tmux send-keys -t "$CLAUDE" "claude" Enter
+tmux send-keys -t "$LEFT_TOP" "tmux-session-overview" Enter
+tmux send-keys -t "$LEFT_BOT" "claude" Enter
+tmux send-keys -t "$RIGHT_TOP" "tmux-clock" Enter
+# RIGHT_BOT stays a plain terminal
 
-tmux select-pane -t "$CLAUDE"
+tmux select-pane -t "$LEFT_BOT"
 
 if [[ -n "$TMUX" ]]; then
     tmux switch-client -t "$SESSION"
