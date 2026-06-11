@@ -12,8 +12,7 @@ BOLD=$'\033[1m'
 RESET=$'\033[0m'
 ESC=$'\033'
 
-COLW=22       # visible width of each window column
-GUTTER="  "
+GUTTER="   "
 
 detect_claude_state() {
     local target="$1"
@@ -35,10 +34,10 @@ pane_cell() {
     local sname="$1" widx="$2" pidx="$3" pcmd="$4"
     if [[ "$pcmd" == *claude* ]] || [[ "$pcmd" == "node" ]]; then
         case "$(detect_claude_state "${sname}:${widx}.${pidx}")" in
-            question) printf "${BLUE}${BOLD}claude ● needs answer${RESET}" ;;
-            working)  printf "${YELLOW}claude ⚙ working${RESET}" ;;
-            ready)    printf "${GREEN}claude ● ready${RESET}" ;;
-            *)        printf "${GRAY}claude ○${RESET}" ;;
+            question) printf "${BLUE}${BOLD}●  claude [needs answer]${RESET}" ;;
+            working)  printf "${YELLOW}●  claude [working]${RESET}" ;;
+            ready)    printf "${GREEN}●  claude [ready]${RESET}" ;;
+            *)        printf "${GRAY}○  claude${RESET}" ;;
         esac
     else
         printf "${GRAY}○ %s${RESET}" "$pcmd"
@@ -66,43 +65,44 @@ while true; do
     frame=$(
         printf "${BOLD}${PINK}  sessions${RESET}  ${GRAY}$(date '+%H:%M:%S')${RESET}\n\n"
 
-        while IFS=: read -r sname swindows; do
+        # Build one column per session (lines joined by \x01): session name on
+        # top, its panes listed underneath. Columns print side by side.
+        cols=()
+        maxrows=0
+        colw=0
+        while IFS=: read -r sname; do
             if [[ "$sname" == "$current_session" ]]; then
-                printf " ${PINK}▶ ${BOLD}%s${RESET}\n" "$sname"
+                block="${PINK}▶ ${BOLD}${sname}${RESET}"
             else
-                printf "   ${BOLD}${WHITE}%s${RESET}\n" "$sname"
+                block="${BOLD}${WHITE}${sname}${RESET}"
             fi
 
-            # Build each window as a column (lines joined by \x01), then print
-            # the columns side by side so windows read left-to-right with their
-            # panes stacked underneath.
-            cols=()
-            maxrows=0
-            while IFS=: read -r widx wname; do
-                block="${BOLD}${WHITE}[${widx}] ${wname}${RESET}"
+            while IFS=: read -r widx; do
                 while IFS=: read -r pidx pcmd; do
                     block+=$'\x01'"  $(pane_cell "$sname" "$widx" "$pidx" "$pcmd")"
                 done < <(tmux list-panes -t "${sname}:${widx}" \
                     -F "#{pane_index}:#{pane_current_command}" 2>/dev/null)
-                cols+=("$block")
-                IFS=$'\x01' read -ra _lines <<< "$block"
-                (( ${#_lines[@]} > maxrows )) && maxrows=${#_lines[@]}
             done < <(tmux list-windows -t "$sname" \
-                -F "#{window_index}:#{window_name}" 2>/dev/null)
+                -F "#{window_index}" 2>/dev/null)
 
-            for (( r = 0; r < maxrows; r++ )); do
-                printf "   "
-                for block in "${cols[@]}"; do
-                    IFS=$'\x01' read -ra lines <<< "$block"
-                    cell="${lines[r]:-}"
-                    pad=$(( COLW - $(vislen "$cell") ))
-                    (( pad < 0 )) && pad=0
-                    printf '%s%*s%s' "$cell" "$pad" "" "$GUTTER"
-                done
-                printf "\n"
+            cols+=("$block")
+            IFS=$'\x01' read -ra _lines <<< "$block"
+            (( ${#_lines[@]} > maxrows )) && maxrows=${#_lines[@]}
+            for _l in "${_lines[@]}"; do
+                _w=$(vislen "$_l"); (( _w > colw )) && colw=$_w
+            done
+        done < <(tmux list-sessions -F "#{session_name}" 2>/dev/null)
+
+        for (( r = 0; r < maxrows; r++ )); do
+            printf " "
+            for block in "${cols[@]}"; do
+                IFS=$'\x01' read -ra lines <<< "$block"
+                cell="${lines[r]:-}"
+                pad=$(( colw - $(vislen "$cell") )); (( pad < 0 )) && pad=0
+                printf '%s%*s%s' "$cell" "$pad" "" "$GUTTER"
             done
             printf "\n"
-        done < <(tmux list-sessions -F "#{session_name}:#{session_windows}" 2>/dev/null)
+        done
     )
 
     # Redraw in place: home cursor, clear each line as we overwrite it,
