@@ -117,6 +117,28 @@ build_frame() {
     )
 }
 
+# Cycle to the adjacent session and focus its overview pane.
+handle_nav() {
+    local dir="$1"
+    local -a sessions
+    mapfile -t sessions < <(tmux list-sessions -F "#{session_name}" 2>/dev/null)
+    (( ${#sessions[@]} < 2 )) && return
+    local current idx next
+    current=$(tmux display-message -p '#S' 2>/dev/null)
+    idx=0
+    for i in "${!sessions[@]}"; do
+        [[ "${sessions[$i]}" == "$current" ]] && idx=$i && break
+    done
+    if [[ "$dir" == "right" ]]; then
+        next=$(( (idx + 1) % ${#sessions[@]} ))
+    else
+        next=$(( (idx - 1 + ${#sessions[@]}) % ${#sessions[@]} ))
+    fi
+    local target="${sessions[$next]}"
+    tmux switch-client -t "$target" 2>/dev/null
+    tmux select-pane -t "${target}:0.0" 2>/dev/null
+}
+
 # Map a click at (x, y) — 1-indexed terminal cells — to a tmux target and jump.
 handle_click() {
     local x="$1" y="$2" r stride rel c off target s rest w p
@@ -159,7 +181,7 @@ trap 'exit 0' INT TERM
 tmux set -g mouse on 2>/dev/null
 printf '\033[?25l\033[?1000h\033[?1006h\033[2J'
 
-mouse_re='^\[<([0-9]+);([0-9]+);([0-9]+)([Mm])$'
+mouse_re='^<([0-9]+);([0-9]+);([0-9]+)([Mm])$'
 
 while true; do
     build_frame
@@ -168,23 +190,32 @@ while true; do
     # then clear anything left below from a previous, taller frame.
     printf '\033[H%s%s\033[J' "${FRAME//$'\n'/$CLR_EOL$'\n'}" "$CLR_EOL"
 
-    # Wait up to 1s for input. A left-button press arrives as an SGR mouse
-    # sequence (ESC [ < b ; x ; y M); decode it and jump. No input => redraw
-    # (this is what keeps the clock ticking).
+    # Wait up to 1s for input.
+    # Mouse: ESC [ < btn ; x ; y M  — left-click jumps to session/pane.
+    # Keyboard: ESC [ C (right) / ESC [ D (left) — cycle sessions.
     if IFS= read -rsn1 -t 1 ch; then
         if [[ "$ch" == "$ESC" ]]; then
-            rest=""
-            while IFS= read -rsn1 -t 0.02 ch2; do
-                rest+="$ch2"
-                [[ "$ch2" == [Mm] ]] && break
-            done
-            if [[ "$rest" =~ $mouse_re ]]; then
-                btn="${BASH_REMATCH[1]}"
-                mx="${BASH_REMATCH[2]}"
-                my="${BASH_REMATCH[3]}"
-                act="${BASH_REMATCH[4]}"
-                # Button 0 (left), press only (M, not release m).
-                [[ "$btn" == "0" && "$act" == "M" ]] && handle_click "$mx" "$my"
+            IFS= read -rsn1 -t 0.05 ch2
+            if [[ "$ch2" == "[" ]]; then
+                IFS= read -rsn1 -t 0.05 ch3
+                case "$ch3" in
+                    "<")
+                        seq=""
+                        while IFS= read -rsn1 -t 0.02 ch4; do
+                            seq+="$ch4"
+                            [[ "$ch4" == [Mm] ]] && break
+                        done
+                        if [[ "$seq" =~ $mouse_re ]]; then
+                            btn="${BASH_REMATCH[1]}"
+                            mx="${BASH_REMATCH[2]}"
+                            my="${BASH_REMATCH[3]}"
+                            act="${BASH_REMATCH[4]}"
+                            [[ "$btn" == "0" && "$act" == "M" ]] && handle_click "$mx" "$my"
+                        fi
+                        ;;
+                    "C") handle_nav right ;;
+                    "D") handle_nav left ;;
+                esac
             fi
         fi
     fi
