@@ -118,3 +118,4 @@ fi
 export PATH="$HOME/.local/bin:$PATH"
 
 eval "$(oh-my-posh init bash --config '~/.theme.omp.json')"
+eval "$(zoxide init bash)"
