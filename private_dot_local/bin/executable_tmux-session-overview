@@ -22,7 +22,7 @@ detect_claude_state() {
         echo "question"
     elif echo "$content" | grep -qi 'esc to interrupt'; then
         echo "working"
-    elif echo "$content" | grep -qi 'for shortcuts'; then
+    elif echo "$content" | grep -qiE 'for shortcuts|shift.tab to cycle|← for agents'; then
         echo "ready"
     else
         echo "active"
@@ -34,10 +34,10 @@ pane_cell() {
     local sname="$1" widx="$2" pidx="$3" pcmd="$4"
     if [[ "$pcmd" == *claude* ]] || [[ "$pcmd" == "node" ]]; then
         case "$(detect_claude_state "${sname}:${widx}.${pidx}")" in
-            question) printf "${BLUE}${BOLD}●  claude [needs answer]${RESET}" ;;
-            working)  printf "${YELLOW}●  claude [working]${RESET}" ;;
-            ready)    printf "${GREEN}●  claude [ready]${RESET}" ;;
-            *)        printf "${GRAY}○  claude${RESET}" ;;
+            question) printf "${BLUE}${BOLD}● claude [needs answer]${RESET}" ;;
+            working)  printf "${YELLOW}● claude [working]${RESET}" ;;
+            ready)    printf "${GREEN}● claude [ready]${RESET}" ;;
+            *)        printf "${WHITE}○ claude [typing?]${RESET}" ;;
         esac
     else
         printf "${GRAY}○ %s${RESET}" "$pcmd"
@@ -52,50 +52,61 @@ vislen() {
 
 CLR_EOL=$'\033[K'
 
-# Hide cursor while redrawing; restore it (and clear) on exit.
-# Ctrl+C / SIGTERM exit, which fires the EXIT trap to restore the terminal.
-cleanup() { printf '\033[?25h\033[2J\033[H'; }
-trap cleanup EXIT
-trap 'exit 0' INT TERM
-printf '\033[?25l\033[2J'
+# Layout state shared between the renderer and the click handler.
+declare -A CLICK_MAP   # "col:row" -> "session:<name>" or "pane:<sess>:<win>:<pane>"
+COLS_BLOCKS=()
+maxrows=0
+colw=0
+FRAME=""
 
-while true; do
+# Build the printable frame and the click map for the current tmux state.
+# The grid starts on terminal line 3 (1-indexed): line 1 is the header, line 2
+# is blank. Each grid row r maps to mouse_y = r + 3. Within a row, column c's
+# content spans mouse_x in [2 + c*(colw+3), that + colw).
+build_frame() {
+    local current_session sname widx pidx pcmd block lineno _l _w cidx=0
     current_session=$(tmux display-message -p '#S' 2>/dev/null)
 
-    frame=$(
-        printf "${BOLD}${PINK}  sessions${RESET}  ${GRAY}$(date '+%H:%M:%S')${RESET}\n\n"
+    CLICK_MAP=()
+    COLS_BLOCKS=()
+    maxrows=0
+    colw=0
 
-        # Build one column per session (lines joined by \x01): session name on
-        # top, its panes listed underneath. Columns print side by side.
-        cols=()
-        maxrows=0
-        colw=0
-        while IFS=: read -r sname; do
-            if [[ "$sname" == "$current_session" ]]; then
-                block="${PINK}▶ ${BOLD}${sname}${RESET}"
-            else
-                block="${BOLD}${WHITE}${sname}${RESET}"
-            fi
+    # Build one column per session (lines joined by \x01): session name on top,
+    # its panes listed underneath. Columns print side by side.
+    while IFS=: read -r sname; do
+        if [[ "$sname" == "$current_session" ]]; then
+            block="${PINK}▶ ${BOLD}${sname}${RESET}"
+        else
+            block="${BOLD}${WHITE}${sname}${RESET}"
+        fi
+        CLICK_MAP["$cidx:0"]="session:$sname"
+        lineno=1
 
-            while IFS=: read -r widx; do
-                while IFS=: read -r pidx pcmd; do
-                    block+=$'\x01'"  $(pane_cell "$sname" "$widx" "$pidx" "$pcmd")"
-                done < <(tmux list-panes -t "${sname}:${widx}" \
-                    -F "#{pane_index}:#{pane_current_command}" 2>/dev/null)
-            done < <(tmux list-windows -t "$sname" \
-                -F "#{window_index}" 2>/dev/null)
+        while IFS=: read -r widx; do
+            while IFS=: read -r pidx pcmd; do
+                block+=$'\x01'"  $(pane_cell "$sname" "$widx" "$pidx" "$pcmd")"
+                CLICK_MAP["$cidx:$lineno"]="pane:$sname:$widx:$pidx"
+                ((lineno++))
+            done < <(tmux list-panes -t "${sname}:${widx}" \
+                -F "#{pane_index}:#{pane_current_command}" 2>/dev/null)
+        done < <(tmux list-windows -t "$sname" \
+            -F "#{window_index}" 2>/dev/null)
 
-            cols+=("$block")
-            IFS=$'\x01' read -ra _lines <<< "$block"
-            (( ${#_lines[@]} > maxrows )) && maxrows=${#_lines[@]}
-            for _l in "${_lines[@]}"; do
-                _w=$(vislen "$_l"); (( _w > colw )) && colw=$_w
-            done
-        done < <(tmux list-sessions -F "#{session_name}" 2>/dev/null)
+        COLS_BLOCKS+=("$block")
+        IFS=$'\x01' read -ra _lines <<< "$block"
+        (( ${#_lines[@]} > maxrows )) && maxrows=${#_lines[@]}
+        for _l in "${_lines[@]}"; do
+            _w=$(vislen "$_l"); (( _w > colw )) && colw=$_w
+        done
+        ((cidx++))
+    done < <(tmux list-sessions -F "#{session_name}" 2>/dev/null)
 
+    FRAME=$(
+        printf " ${BOLD}${PINK}sessions${RESET}  ${GRAY}$(date '+%H:%M:%S')${RESET}\n\n"
         for (( r = 0; r < maxrows; r++ )); do
             printf " "
-            for block in "${cols[@]}"; do
+            for block in "${COLS_BLOCKS[@]}"; do
                 IFS=$'\x01' read -ra lines <<< "$block"
                 cell="${lines[r]:-}"
                 pad=$(( colw - $(vislen "$cell") )); (( pad < 0 )) && pad=0
@@ -104,10 +115,77 @@ while true; do
             printf "\n"
         done
     )
+}
+
+# Map a click at (x, y) — 1-indexed terminal cells — to a tmux target and jump.
+handle_click() {
+    local x="$1" y="$2" r stride rel c off target s rest w p
+    r=$(( y - 3 ))
+    (( r < 0 )) && return
+    stride=$(( colw + 3 ))
+    (( stride <= 0 )) && return
+    rel=$(( x - 2 ))
+    (( rel < 0 )) && return
+    c=$(( rel / stride ))
+    off=$(( rel - c * stride ))
+    (( off >= colw )) && return   # clicked in the gutter between columns
+
+    target="${CLICK_MAP["$c:$r"]:-}"
+    [[ -z "$target" ]] && return
+
+    case "$target" in
+        session:*)
+            s="${target#session:}"
+            tmux switch-client -t "$s" 2>/dev/null
+            ;;
+        pane:*)
+            rest="${target#pane:}"
+            s="${rest%%:*}"; rest="${rest#*:}"
+            w="${rest%%:*}"; p="${rest#*:}"
+            tmux switch-client -t "$s" 2>/dev/null
+            tmux select-window -t "$s:$w" 2>/dev/null
+            tmux select-pane -t "$s:$w.$p" 2>/dev/null
+            ;;
+    esac
+}
+
+# Hide cursor and enable SGR mouse reporting while drawing; restore on exit.
+# Ctrl+C / SIGTERM exit, which fires the EXIT trap to restore the terminal.
+cleanup() { printf '\033[?1000l\033[?1006l\033[?25h\033[2J\033[H'; }
+trap cleanup EXIT
+trap 'exit 0' INT TERM
+
+# Mouse clicks only reach this program when tmux mouse mode is on.
+tmux set -g mouse on 2>/dev/null
+printf '\033[?25l\033[?1000h\033[?1006h\033[2J'
+
+mouse_re='^\[<([0-9]+);([0-9]+);([0-9]+)([Mm])$'
+
+while true; do
+    build_frame
 
     # Redraw in place: home cursor, clear each line as we overwrite it,
     # then clear anything left below from a previous, taller frame.
-    printf '\033[H%s%s\033[J' "${frame//$'\n'/$CLR_EOL$'\n'}" "$CLR_EOL"
+    printf '\033[H%s%s\033[J' "${FRAME//$'\n'/$CLR_EOL$'\n'}" "$CLR_EOL"
 
-    sleep 1
+    # Wait up to 1s for input. A left-button press arrives as an SGR mouse
+    # sequence (ESC [ < b ; x ; y M); decode it and jump. No input => redraw
+    # (this is what keeps the clock ticking).
+    if IFS= read -rsn1 -t 1 ch; then
+        if [[ "$ch" == "$ESC" ]]; then
+            rest=""
+            while IFS= read -rsn1 -t 0.02 ch2; do
+                rest+="$ch2"
+                [[ "$ch2" == [Mm] ]] && break
+            done
+            if [[ "$rest" =~ $mouse_re ]]; then
+                btn="${BASH_REMATCH[1]}"
+                mx="${BASH_REMATCH[2]}"
+                my="${BASH_REMATCH[3]}"
+                act="${BASH_REMATCH[4]}"
+                # Button 0 (left), press only (M, not release m).
+                [[ "$btn" == "0" && "$act" == "M" ]] && handle_click "$mx" "$my"
+            fi
+        fi
+    fi
 done

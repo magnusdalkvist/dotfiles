@@ -16,16 +16,29 @@ else
     fi
 fi
 
-tmux new-session -d -s "$SESSION"
+# Build the session at the real terminal size so attaching doesn't trigger a
+# proportional rescale that would stretch the absolute pane heights back out.
+if [[ -n "$TMUX" ]]; then
+    COLS=$(tmux display-message -p '#{client_width}')
+    ROWS=$(tmux display-message -p '#{client_height}')
+else
+    COLS=$(tput cols)
+    ROWS=$(tput lines)
+fi
+tmux new-session -d -s "$SESSION" -x "${COLS:-200}" -y "${ROWS:-50}"
 # Capture stable pane ids — tmux renumbers pane *indices* after each split,
 # so we track %ids instead of 0.0/0.2/etc.
 LEFT_TOP=$(tmux display-message -p -t "$SESSION:0.0" '#{pane_id}')
 # Right column (50%)
 RIGHT_TOP=$(tmux split-window -h -p 50 -t "$LEFT_TOP" -P -F '#{pane_id}')
-# Left column: overview (top 20%), claude (bottom 80%)
+# Left column: overview (top), claude (bottom)
 LEFT_BOT=$(tmux split-window -v -p 80 -t "$LEFT_TOP" -P -F '#{pane_id}')
-# Right column: clock (top 20%), terminal (bottom 80%)
+# Right column: clock (top), terminal (bottom)
 RIGHT_BOT=$(tmux split-window -v -p 80 -t "$RIGHT_TOP" -P -F '#{pane_id}')
+
+# Pin the overview and clock panes to exactly 8 lines tall.
+tmux resize-pane -t "$LEFT_TOP" -y 8
+tmux resize-pane -t "$RIGHT_TOP" -y 8
 
 tmux send-keys -t "$LEFT_TOP" "tmux-session-overview" Enter
 tmux send-keys -t "$LEFT_BOT" "claude" Enter
