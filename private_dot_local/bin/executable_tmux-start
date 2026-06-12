@@ -1,7 +1,82 @@
 #!/usr/bin/env bash
 
+# Parse args: --ssh opens the claude + terminal panes on a remote dev box
+# (configured in ~/.config/tmux-start.conf); any other arg is the session name.
+SSH_MODE=0
+BASE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --ssh|-s) SSH_MODE=1 ;;
+        *)        BASE="$1" ;;
+    esac
+    shift
+done
+
+REMOTE_CLAUDE=""
+REMOTE_TERM=""
+
+if (( SSH_MODE )); then
+    if (( BASH_VERSINFO[0] < 4 )); then
+        echo "tmux-start --ssh requires bash 4+. On macOS: brew install bash" >&2
+        exit 1
+    fi
+    command -v fzf &>/dev/null || { echo "tmux-start --ssh requires fzf" >&2; exit 1; }
+
+    CONF="${XDG_CONFIG_HOME:-$HOME/.config}/tmux-start.conf"
+    if [[ ! -f "$CONF" ]]; then
+        echo "No remote config at $CONF" >&2
+        echo "Create it with:" >&2
+        echo "  host=your-ssh-host   # alias from ~/.ssh/config, or user@host" >&2
+        echo "  root=~/code          # remote dir whose subfolders are your repos" >&2
+        exit 1
+    fi
+
+    trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
+
+    HOST="" ROOT=""
+    while IFS='=' read -r key val; do
+        key="$(trim "$key")"
+        [[ -z "$key" || "$key" == \#* ]] && continue
+        val="$(trim "$val")"
+        case "$key" in
+            host) HOST="$val" ;;
+            root) ROOT="$val" ;;
+        esac
+    done < "$CONF"
+
+    [[ -z "$HOST" ]] && { echo "No 'host=' line in $CONF" >&2; exit 1; }
+    ROOT="${ROOT:-~/code}"
+
+    # Share one connection across the listing + both panes (no repeated auth).
+    SSH_CTL="$HOME/.ssh/cm-tmux-start-%r@%h:%p"
+    SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=$SSH_CTL" -o ControlPersist=60)
+
+    # ~ and * expand on the remote; trailing slash stripped for clean basenames.
+    mapfile -t REPOS < <(ssh "${SSH_OPTS[@]}" "$HOST" "ls -1d $ROOT/*/ 2>/dev/null" | sed 's#/*$##')
+    if (( ${#REPOS[@]} == 0 )); then
+        echo "No directories found in $ROOT on $HOST" >&2
+        exit 1
+    fi
+
+    REPO=$(printf '%s\n' "${REPOS[@]}" | fzf --prompt="$HOST repo> " --delimiter=/ --with-nth=-1)
+    [[ -z "$REPO" ]] && { echo "No selection." >&2; exit 1; }
+
+    NAME="$(basename "$REPO")"
+    BASE="${BASE:-${NAME//[.:]/-}}"
+
+    # Build the commands typed into each remote pane. %q escapes for the local
+    # shell so $SHELL and the path survive intact to the remote shell.
+    build_ssh() {
+        printf 'ssh -t -o ControlMaster=auto -o ControlPath=%q -o ControlPersist=60 %q %q' \
+            "$SSH_CTL" "$HOST" "cd \"$REPO\" && $1"
+    }
+    REMOTE_CLAUDE="$(build_ssh claude)"
+    REMOTE_TERM="$(build_ssh 'exec $SHELL -l')"
+fi
+
+BASE="${BASE:-main}"
+
 if [[ -n "$TMUX" ]]; then
-    BASE="${1:-main}"
     SESSION="$BASE"
     i=2
     while tmux has-session -t "$SESSION" 2>/dev/null; do
@@ -9,7 +84,7 @@ if [[ -n "$TMUX" ]]; then
         ((i++))
     done
 else
-    SESSION="${1:-main}"
+    SESSION="$BASE"
     if tmux has-session -t "$SESSION" 2>/dev/null; then
         tmux attach-session -t "$SESSION"
         exit
@@ -41,10 +116,17 @@ RIGHT_BOT=$(tmux split-window -v -p 80 -t "$RIGHT_TOP" -P -F '#{pane_id}')
 tmux resize-pane -t "$LEFT_TOP" -y 8
 tmux resize-pane -t "$RIGHT_TOP" -y 8
 
+# Overview and clock are local TUIs (they drive the local tmux server), so they
+# stay local even in --ssh mode; only claude + the terminal go to the dev box.
 tmux send-keys -t "$LEFT_TOP" "tmux-session-overview" Enter
-tmux send-keys -t "$LEFT_BOT" "claude" Enter
 tmux send-keys -t "$RIGHT_TOP" "tmux-clock" Enter
-# RIGHT_BOT stays a plain terminal
+if (( SSH_MODE )); then
+    tmux send-keys -t "$LEFT_BOT" "$REMOTE_CLAUDE" Enter
+    tmux send-keys -t "$RIGHT_BOT" "$REMOTE_TERM" Enter
+else
+    tmux send-keys -t "$LEFT_BOT" "claude" Enter
+    # RIGHT_BOT stays a plain terminal
+fi
 
 tmux select-pane -t "$LEFT_BOT"
 

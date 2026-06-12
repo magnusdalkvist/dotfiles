@@ -39,6 +39,20 @@ Requires `brew` (macOS) or `apt` (Linux) — the setup scripts handle the rest.
 └──────────────────────┴──────────────────────┘
 ```
 
+`tmux-start [name]` builds the grid locally. `tmux-start --ssh` opens the
+`claude` and terminal panes on a remote dev box instead: it reads the host from
+`~/.config/tmux-start.conf`, lists the repo folders under the configured root,
+and lets you fzf-pick the one to start in. The overview and clock stay local.
+
+```
+# ~/.config/tmux-start.conf
+host=dev-box   # alias from ~/.ssh/config, or user@host
+root=~/code    # remote dir whose subfolders are your repos
+```
+
+Claude must be installed on the remote host for `--ssh` mode. Connections are
+multiplexed (`ControlMaster`), so the listing and both panes share one session.
+
 ### Key bindings
 
 | Binding | Action |
@@ -52,3 +66,4 @@ Requires `brew` (macOS) or `apt` (Linux) — the setup scripts handle the rest.
 
 - tmux scripts require bash 4+. On macOS, the setup script installs bash 5 via brew.
 - Clipboard integration uses `pbcopy` on macOS and `xclip` on Linux.
+- `tmux-start --ssh` requires `fzf` locally and `claude` on the remote host.
