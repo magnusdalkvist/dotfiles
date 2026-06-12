@@ -116,6 +116,10 @@ RIGHT_BOT=$(tmux split-window -v -p 80 -t "$RIGHT_TOP" -P -F '#{pane_id}')
 tmux resize-pane -t "$LEFT_TOP" -y 8
 tmux resize-pane -t "$RIGHT_TOP" -y 8
 
+# Label these panes so the border shows their purpose, not "bash".
+tmux set -p -t "$LEFT_TOP" @label "overview"
+tmux set -p -t "$RIGHT_TOP" @label "clock"
+
 # Overview and clock are local TUIs (they drive the local tmux server), so they
 # stay local even in --ssh mode; only claude + the terminal go to the dev box.
 tmux send-keys -t "$LEFT_TOP" "tmux-session-overview" Enter

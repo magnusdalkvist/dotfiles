@@ -37,7 +37,7 @@ glyph() {
 while [[ -f "$FLAGFILE" ]]; do
     cols=$(tmux display -p -t "$TMUX_PANE" '#{pane_width}' 2>/dev/null)
     rows=$(tmux display -p -t "$TMUX_PANE" '#{pane_height}' 2>/dev/null)
-    timestr=$(date '+%H:%M')
+    timestr=$(date '+%H:%M:%S')
 
     r=("" "" "" "" "")
     for (( i = 0; i < ${#timestr}; i++ )); do

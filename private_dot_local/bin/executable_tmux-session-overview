@@ -115,7 +115,7 @@ build_frame() {
     done < <(tmux list-sessions -F "#{session_name}" 2>/dev/null)
 
     FRAME=$(
-        printf " ${BOLD}${PINK}sessions${RESET}  ${GRAY}$(date '+%H:%M:%S')${RESET}\n\n"
+        printf " ${BOLD}${PINK}sessions${RESET}\n\n"
         for (( r = 0; r < maxrows; r++ )); do
             printf " "
             for block in "${COLS_BLOCKS[@]}"; do
