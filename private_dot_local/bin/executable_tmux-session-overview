@@ -72,9 +72,10 @@ colw=0
 FRAME=""
 
 # Build the printable frame and the click map for the current tmux state.
-# The grid starts on terminal line 3 (1-indexed): line 1 is the header, line 2
-# is blank. Each grid row r maps to mouse_y = r + 3. Within a row, column c's
-# content spans mouse_x in [2 + c*(colw+3), that + colw).
+# The grid starts on terminal line 2 (1-indexed): line 1 is a blank spacer (the
+# "sessions" label now lives in the pane border). Each grid row r maps to
+# mouse_y = r + 2. Within a row, column c's content spans mouse_x in
+# [2 + c*(colw+3), that + colw).
 build_frame() {
     local current_session sname widx pidx pcmd block lineno _l _w cidx=0
     current_session=$(tmux display-message -p '#S' 2>/dev/null)
@@ -115,7 +116,7 @@ build_frame() {
     done < <(tmux list-sessions -F "#{session_name}" 2>/dev/null)
 
     FRAME=$(
-        printf " ${BOLD}${PINK}sessions${RESET}\n\n"
+        printf "\n"
         for (( r = 0; r < maxrows; r++ )); do
             printf " "
             for block in "${COLS_BLOCKS[@]}"; do
@@ -154,7 +155,7 @@ handle_nav() {
 # Map a click at (x, y) — 1-indexed terminal cells — to a tmux target and jump.
 handle_click() {
     local x="$1" y="$2" r stride rel c off target s rest w p
-    r=$(( y - 3 ))
+    r=$(( y - 2 ))
     (( r < 0 )) && return
     stride=$(( colw + 3 ))
     (( stride <= 0 )) && return
