@@ -26,6 +26,7 @@ else
     ROWS=$(tput lines)
 fi
 tmux new-session -d -s "$SESSION" -x "${COLS:-200}" -y "${ROWS:-50}"
+tmux set-option -t "$SESSION" default-shell "${SHELL:-/bin/sh}"
 # Capture stable pane ids — tmux renumbers pane *indices* after each split,
 # so we track %ids instead of 0.0/0.2/etc.
 LEFT_TOP=$(tmux display-message -p -t "$SESSION:0.0" '#{pane_id}')

@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-SESSION=$(tmux display-message -p '#S')
-FLAGFILE="/tmp/tmux-clock-${SESSION}"
-
-if [[ -f "$FLAGFILE" ]]; then
-    rm -f "$FLAGFILE"
-else
-    tmux send-keys -t "${SESSION}:0.0" "tmux-clock" Enter
-fi

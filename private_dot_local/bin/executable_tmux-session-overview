@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "tmux-session-overview requires bash 4+. On macOS: brew install bash" >&2
+    exit 1
+fi
+
 shopt -s extglob
 
 PINK=$'\033[38;2;255;80;115m'

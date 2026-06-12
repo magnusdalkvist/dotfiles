@@ -1,0 +1,35 @@
+[[ $- != *i* ]] && return
+
+HISTFILE="$HOME/.zsh_history"
+HISTSIZE=10000
+SAVEHIST=10000
+setopt HIST_IGNORE_DUPS HIST_IGNORE_SPACE SHARE_HISTORY APPEND_HISTORY
+
+export PATH="$HOME/.local/bin:$PATH"
+
+# Homebrew (macOS — try Apple Silicon path first, then Intel)
+if [[ "$(uname)" == "Darwin" ]]; then
+    for d in /opt/homebrew/bin /usr/local/bin; do
+        [[ -d "$d" ]] && export PATH="$d:$PATH" && break
+    done
+fi
+
+# Color ls — macOS uses -G, Linux uses --color=auto
+if [[ "$(uname)" == "Darwin" ]]; then
+    alias ls='ls -G'
+else
+    alias ls='ls --color=auto'
+fi
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
+alias grep='grep --color=auto'
+alias fgrep='fgrep --color=auto'
+alias egrep='egrep --color=auto'
+
+# Shared aliases (navigation, editor, claude)
+[[ -f ~/.bash_aliases ]] && source ~/.bash_aliases
+
+eval "$(oh-my-posh init zsh --config '~/.theme.omp.json')"
+eval "$(zoxide init zsh)"
+command -v fzf &>/dev/null && eval "$(fzf --zsh)" 2>/dev/null || true
