@@ -1,0 +1,9 @@
+# Remote dev environment for `tmux-start --ssh`.
+# host = an alias from ~/.ssh/config, or user@hostname
+# root = directory on the remote whose subfolders are your repos
+#
+# These values come from chezmoi template data: the shared default lives in the
+# repo's .chezmoidata.toml; override per machine in ~/.config/chezmoi/chezmoi.toml
+# under [data] (that file is local and not committed).
+host={{ .tmuxStartHost }}
+root={{ .tmuxStartRoot }}

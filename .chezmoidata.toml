@@ -1,0 +1,4 @@
+# Shared defaults for templated dotfiles. Override per machine in the local
+# (un-shared) chezmoi config at ~/.config/chezmoi/chezmoi.toml under [data].
+tmuxStartHost = "dev-box"
+tmuxStartRoot = "~/code"
