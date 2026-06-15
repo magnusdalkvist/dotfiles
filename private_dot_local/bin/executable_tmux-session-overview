@@ -36,7 +36,7 @@ detect_claude_state() {
 
 # Coloured one-line cell for a pane.
 pane_cell() {
-    local sname="$1" widx="$2" pidx="$3" pcmd="$4" state="active"
+    local sname="$1" widx="$2" pidx="$3" pcmd="$4" plabel="$5" state="active"
     # claude may run locally (claude/node) or over ssh on a dev box. For ssh
     # panes we inspect the content: a definite claude marker means it's claude,
     # otherwise it's just a remote shell and we show it as ssh.
@@ -52,7 +52,9 @@ pane_cell() {
             *)        printf "${WHITE}○ claude [typing?]${RESET}" ;;
         esac
     else
-        printf "${GRAY}○ %s${RESET}" "$pcmd"
+        # Prefer the pane's @label (e.g. "sessions", "clock") over the raw
+        # command, which would otherwise just read "bash".
+        printf "${GRAY}○ %s${RESET}" "${plabel:-$pcmd}"
     fi
 }
 
@@ -62,14 +64,47 @@ vislen() {
     printf '%s' "${#stripped}"
 }
 
+# Truncate a (possibly colour-coded) string to at most $2 visible columns,
+# copying ANSI CSI sequences through without counting them. Appends … when it
+# has to cut, and always closes with RESET so colour never bleeds past the cell.
+clip() {
+    local s="$1" max="$2"
+    [[ -z "$s" ]] && return
+    local vw; vw=$(vislen "$s")
+    (( vw <= max )) && { printf '%s' "$s"; return; }
+    local limit=$(( max - 1 )); (( limit < 0 )) && limit=0
+    local out="" vis=0 i=0 n=${#s} c
+    while (( i < n )); do
+        c="${s:i:1}"
+        if [[ "$c" == "$ESC" ]]; then
+            out+="$c"; ((i++))
+            if [[ "${s:i:1}" == "[" ]]; then
+                out+="["; ((i++))
+                while (( i < n )); do c="${s:i:1}"; out+="$c"; ((i++)); [[ "$c" == [a-zA-Z] ]] && break; done
+            fi
+            continue
+        fi
+        (( vis >= limit )) && break
+        out+="$c"; ((vis++)); ((i++))
+    done
+    printf '%s…%s' "$out" "$RESET"
+}
+
 CLR_EOL=$'\033[K'
 
 # Layout state shared between the renderer and the click handler.
-declare -A CLICK_MAP   # "col:row" -> "session:<name>" or "pane:<sess>:<win>:<pane>"
+declare -A CLICK_MAP   # "absolute_col:row" -> "session:<name>" or "pane:<sess>:<win>:<pane>"
 COLS_BLOCKS=()
 maxrows=0
 colw=0
 FRAME=""
+
+LEFT_MARGIN=2          # cells reserved at the left edge for the ‹ scroll marker
+CROWD_CAP=16           # cap on column width once scrolling is needed
+VIEW_START=0           # absolute index of the leftmost visible session column
+VISIBLE=0              # number of session columns currently on screen
+MARK_L="‹"             # hidden-sessions-to-the-left marker
+MARK_R="›"             # hidden-sessions-to-the-right marker
 
 # Build the printable frame and the click map for the current tmux state.
 # The grid starts on terminal line 2 (1-indexed): line 1 is a blank spacer (the
@@ -77,8 +112,11 @@ FRAME=""
 # mouse_y = r + 2. Within a row, column c's content spans mouse_x in
 # [2 + c*(colw+3), that + colw).
 build_frame() {
-    local current_session sname widx pidx pcmd block lineno _l _w cidx=0
-    current_session=$(tmux display-message -p '#S' 2>/dev/null)
+    local current_session sname widx pidx pcmd block lineno _l _w cidx=0 current_idx=0
+    # Anchor to this pane's own session so each overview highlights (and scrolls
+    # to) itself deterministically, regardless of which client is where.
+    current_session=$(tmux display-message -p -t "${TMUX_PANE:-}" '#S' 2>/dev/null)
+    [[ -n "$current_session" ]] || current_session=$(tmux display-message -p '#S' 2>/dev/null)
 
     CLICK_MAP=()
     COLS_BLOCKS=()
@@ -87,9 +125,15 @@ build_frame() {
 
     # Build one column per session (lines joined by \x01): session name on top,
     # its panes listed underneath. Columns print side by side.
+    #
+    # The current session is shown purely by colour (pink vs white) — no arrow or
+    # other marker. Every column is therefore the same width regardless of which
+    # session is selected, so switching the current session never shifts the
+    # layout. Panes use one uniform indent for the same reason.
     while IFS=: read -r sname; do
         if [[ "$sname" == "$current_session" ]]; then
-            block="${PINK}▶ ${BOLD}${sname}${RESET}"
+            block="${PINK}${BOLD}${sname}${RESET}"
+            current_idx=$cidx
         else
             block="${BOLD}${WHITE}${sname}${RESET}"
         fi
@@ -97,12 +141,12 @@ build_frame() {
         lineno=1
 
         while IFS=: read -r widx; do
-            while IFS=: read -r pidx pcmd; do
-                block+=$'\x01'"  $(pane_cell "$sname" "$widx" "$pidx" "$pcmd")"
+            while IFS=$'\t' read -r pidx pcmd plabel; do
+                block+=$'\x01'"  $(pane_cell "$sname" "$widx" "$pidx" "$pcmd" "$plabel")"
                 CLICK_MAP["$cidx:$lineno"]="pane:$sname:$widx:$pidx"
                 ((lineno++))
             done < <(tmux list-panes -t "${sname}:${widx}" \
-                -F "#{pane_index}:#{pane_current_command}" 2>/dev/null)
+                -F "#{pane_index}	#{pane_current_command}	#{@label}" 2>/dev/null)
         done < <(tmux list-windows -t "$sname" \
             -F "#{window_index}" 2>/dev/null)
 
@@ -115,15 +159,64 @@ build_frame() {
         ((cidx++))
     done < <(tmux list-sessions -F "#{session_name}" 2>/dev/null)
 
+    # Fit the columns to the pane, scrolling when there are too many to show.
+    # A row is: LEFT_MARGIN cells (the ‹ marker), then VISIBLE session columns
+    # each colw wide separated by GUTTER (3), then an optional › marker. If every
+    # column fits we show them all at natural width (full names); otherwise we cap
+    # the width to surface more columns and scroll a window that always keeps the
+    # current session on screen. Hidden columns are flagged ‹ / › and reached by
+    # clicking a visible session or pressing ←/→.
+    local ncols=${#COLS_BLOCKS[@]} pane_w hard stride max_start
+    pane_w=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_width}' 2>/dev/null)
+    [[ "$pane_w" =~ ^[0-9]+$ ]] || pane_w=$(tput cols 2>/dev/null)
+    [[ "$pane_w" =~ ^[0-9]+$ ]] || pane_w=80
+    (( ncols < 1 )) && ncols=1
+
+    # No single column may exceed the pane (minus the left margin and a › cell).
+    hard=$(( pane_w - LEFT_MARGIN - 1 )); (( hard < 4 )) && hard=4
+    (( colw > hard )) && colw=$hard
+
+    stride=$(( colw + 3 ))
+    VISIBLE=$(( (pane_w - LEFT_MARGIN) / stride )); (( VISIBLE < 1 )) && VISIBLE=1
+    if (( VISIBLE < ncols )); then
+        # Crowded: cap width to show more columns, then recompute the count.
+        (( colw > CROWD_CAP )) && colw=$CROWD_CAP
+        stride=$(( colw + 3 ))
+        VISIBLE=$(( (pane_w - LEFT_MARGIN) / stride )); (( VISIBLE < 1 )) && VISIBLE=1
+    fi
+    (( VISIBLE > ncols )) && VISIBLE=$ncols
+
+    # Slide the viewport only as far as needed to keep the current session in it.
+    (( current_idx < VIEW_START )) && VIEW_START=$current_idx
+    (( current_idx >= VIEW_START + VISIBLE )) && VIEW_START=$(( current_idx - VISIBLE + 1 ))
+    max_start=$(( ncols - VISIBLE )); (( max_start < 0 )) && max_start=0
+    (( VIEW_START > max_start )) && VIEW_START=$max_start
+    (( VIEW_START < 0 )) && VIEW_START=0
+
+    local hidden_left=0 hidden_right=0
+    (( VIEW_START > 0 )) && hidden_left=1
+    (( VIEW_START + VISIBLE < ncols )) && hidden_right=1
+
     FRAME=$(
         printf "\n"
         for (( r = 0; r < maxrows; r++ )); do
-            printf " "
-            for block in "${COLS_BLOCKS[@]}"; do
-                IFS=$'\x01' read -ra lines <<< "$block"
-                cell="${lines[r]:-}"
+            # Left margin (2 cells); the ‹ marker shows on the top row only.
+            if (( r == 0 && hidden_left )); then
+                printf '%s%s%s ' "$GRAY" "$MARK_L" "$RESET"
+            else
+                printf '  '
+            fi
+            for (( j = 0; j < VISIBLE; j++ )); do
+                ci=$(( VIEW_START + j ))
+                IFS=$'\x01' read -ra lines <<< "${COLS_BLOCKS[ci]}"
+                cell="$(clip "${lines[r]:-}" "$colw")"
                 pad=$(( colw - $(vislen "$cell") )); (( pad < 0 )) && pad=0
-                printf '%s%*s%s' "$cell" "$pad" "" "$GUTTER"
+                if (( j == VISIBLE - 1 && r == 0 && hidden_right )); then
+                    # › replaces the trailing gutter on the top row.
+                    printf '%s%*s %s%s%s' "$cell" "$pad" "" "$GRAY" "$MARK_R" "$RESET"
+                else
+                    printf '%s%*s%s' "$cell" "$pad" "" "$GUTTER"
+                fi
             done
             printf "\n"
         done
@@ -153,17 +246,21 @@ handle_nav() {
 }
 
 # Map a click at (x, y) — 1-indexed terminal cells — to a tmux target and jump.
+# Columns begin after the LEFT_MARGIN, and only VISIBLE of them are on screen
+# starting at VIEW_START, so the visible column index is offset into the full set.
 handle_click() {
     local x="$1" y="$2" r stride rel c off target s rest w p
     r=$(( y - 2 ))
     (( r < 0 )) && return
     stride=$(( colw + 3 ))
     (( stride <= 0 )) && return
-    rel=$(( x - 2 ))
-    (( rel < 0 )) && return
+    rel=$(( x - 1 - LEFT_MARGIN ))   # first column starts just past the margin
+    (( rel < 0 )) && return          # clicked in the left margin / ‹ marker
     c=$(( rel / stride ))
     off=$(( rel - c * stride ))
-    (( off >= colw )) && return   # clicked in the gutter between columns
+    (( off >= colw )) && return      # clicked in the gutter between columns
+    (( c >= VISIBLE )) && return     # clicked past the last visible column / › marker
+    c=$(( VIEW_START + c ))          # translate to the absolute session index
 
     target="${CLICK_MAP["$c:$r"]:-}"
     [[ -z "$target" ]] && return
@@ -194,7 +291,9 @@ trap 'exit 0' INT TERM
 tmux set -g mouse on 2>/dev/null
 printf '\033[?25l\033[?1000h\033[?1006h\033[2J'
 
-mouse_re='^<([0-9]+);([0-9]+);([0-9]+)([Mm])$'
+# The leading '<' is consumed as ch3 before seq is built, so it is NOT part of
+# seq here — match what's left: btn ; x ; y and the trailing M (press) / m (release).
+mouse_re='^([0-9]+);([0-9]+);([0-9]+)([Mm])$'
 
 while true; do
     build_frame

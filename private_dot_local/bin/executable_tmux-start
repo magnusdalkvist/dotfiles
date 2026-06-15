@@ -70,7 +70,12 @@ if (( SSH_MODE )); then
         printf 'ssh -t -o ControlMaster=auto -o ControlPath=%q -o ControlPersist=60 %q %q' \
             "$SSH_CTL" "$HOST" "cd \"$REPO\" && $1"
     }
-    REMOTE_CLAUDE="$(build_ssh claude)"
+    # Run claude through a login shell so the remote PATH (claude lives in
+    # ~/.local/bin, added by .profile) is loaded; a bare `ssh host claude` uses a
+    # non-login shell and can't find it. Login-only (-l) — NOT interactive (-i),
+    # which fights the TTY for job control and kills the claude TUI on startup.
+    # $SHELL is single-quoted so it expands on the remote, not here.
+    REMOTE_CLAUDE="$(build_ssh 'exec $SHELL -lc claude')"
     REMOTE_TERM="$(build_ssh 'exec $SHELL -l')"
 fi
 
@@ -125,8 +130,10 @@ tmux set -p -t "$RIGHT_TOP" @label "clock"
 tmux send-keys -t "$LEFT_TOP" "tmux-session-overview" Enter
 tmux send-keys -t "$RIGHT_TOP" "tmux-clock" Enter
 if (( SSH_MODE )); then
-    tmux send-keys -t "$LEFT_BOT" "$REMOTE_CLAUDE" Enter
-    tmux send-keys -t "$RIGHT_BOT" "$REMOTE_TERM" Enter
+    # Prefix `clear;` so the long ssh command the shell echoes is wiped the
+    # instant it runs, leaving just the remote prompt instead of clutter.
+    tmux send-keys -t "$LEFT_BOT" "clear; $REMOTE_CLAUDE" Enter
+    tmux send-keys -t "$RIGHT_BOT" "clear; $REMOTE_TERM" Enter
 else
     tmux send-keys -t "$LEFT_BOT" "claude" Enter
     # RIGHT_BOT stays a plain terminal
