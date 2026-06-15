@@ -121,9 +121,12 @@ RIGHT_BOT=$(tmux split-window -v -p 80 -t "$RIGHT_TOP" -P -F '#{pane_id}')
 tmux resize-pane -t "$LEFT_TOP" -y 7
 tmux resize-pane -t "$RIGHT_TOP" -y 7
 
-# Label these panes so the border shows their purpose, not "bash".
+# Label these panes so the border shows their purpose, not "bash". The claude
+# label also lets the session overview identify the pane even in --ssh mode,
+# where its command shows up as "ssh" (same as the plain terminal pane).
 tmux set -p -t "$LEFT_TOP" @label "sessions"
 tmux set -p -t "$RIGHT_TOP" @label "clock"
+tmux set -p -t "$LEFT_BOT" @label "claude"
 
 # Overview and clock are local TUIs (they drive the local tmux server), so they
 # stay local even in --ssh mode; only claude + the terminal go to the dev box.

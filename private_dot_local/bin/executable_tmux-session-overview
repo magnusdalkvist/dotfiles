@@ -37,13 +37,15 @@ detect_claude_state() {
 # Coloured one-line cell for a pane.
 pane_cell() {
     local sname="$1" widx="$2" pidx="$3" pcmd="$4" plabel="$5" state="active"
-    # claude may run locally (claude/node) or over ssh on a dev box. For ssh
-    # panes we inspect the content: a definite claude marker means it's claude,
-    # otherwise it's just a remote shell and we show it as ssh.
-    if [[ "$pcmd" == *claude* || "$pcmd" == "node" || "$pcmd" == "ssh" ]]; then
+    # claude may run locally (claude/node) or over ssh on a dev box. tmux-start
+    # tags the claude pane with @label "claude", which is the reliable signal
+    # over ssh where the command is just "ssh" (same as the plain terminal pane).
+    # For unlabelled ssh panes we still inspect the content: a definite claude
+    # marker means it's claude, otherwise it's a remote shell shown as ssh.
+    if [[ "$plabel" == "claude" || "$pcmd" == *claude* || "$pcmd" == "node" || "$pcmd" == "ssh" ]]; then
         state="$(detect_claude_state "${sname}:${widx}.${pidx}")"
     fi
-    if [[ "$pcmd" == *claude* || "$pcmd" == "node" ]] \
+    if [[ "$plabel" == "claude" || "$pcmd" == *claude* || "$pcmd" == "node" ]] \
         || [[ "$state" == "question" || "$state" == "working" || "$state" == "ready" ]]; then
         case "$state" in
             question) printf "${BLUE}${BOLD}● claude [needs answer]${RESET}" ;;
