@@ -64,19 +64,23 @@ if (( SSH_MODE )); then
     NAME="$(basename "$REPO")"
     BASE="${BASE:-${NAME//[.:]/-}}"
 
-    # Build the commands typed into each remote pane. %q escapes for the local
-    # shell so $SHELL and the path survive intact to the remote shell.
-    build_ssh() {
-        printf 'ssh -t -o ControlMaster=auto -o ControlPath=%q -o ControlPersist=60 %q %q' \
-            "$SSH_CTL" "$HOST" "cd \"$REPO\" && $1"
+    # Build the commands typed into each remote pane, wrapped in ssh-pane so a
+    # dropped connection or overnight server shutdown auto-reconnects instead of
+    # dumping you back to a dead local shell. %q escapes each arg for the local
+    # pane shell so $SHELL and the path pass through ssh-pane to the remote
+    # shell intact.
+    build_pane() {
+        printf 'ssh-pane %q %q %q' "$HOST" "$REPO" "$1"
     }
     # Run claude through a login shell so the remote PATH (claude lives in
     # ~/.local/bin, added by .profile) is loaded; a bare `ssh host claude` uses a
     # non-login shell and can't find it. Login-only (-l) — NOT interactive (-i),
     # which fights the TTY for job control and kills the claude TUI on startup.
-    # $SHELL is single-quoted so it expands on the remote, not here.
-    REMOTE_CLAUDE="$(build_ssh 'exec $SHELL -lc claude')"
-    REMOTE_TERM="$(build_ssh 'exec $SHELL -l')"
+    # `claude --continue` resumes the last conversation in the repo (your restart
+    # point after a reboot); `|| claude` covers the first launch when there's
+    # nothing to resume yet. $SHELL is single-quoted so it expands on the remote.
+    REMOTE_CLAUDE="$(build_pane '$SHELL -lc "claude --continue || claude"')"
+    REMOTE_TERM="$(build_pane 'exec $SHELL -l')"
 fi
 
 BASE="${BASE:-main}"

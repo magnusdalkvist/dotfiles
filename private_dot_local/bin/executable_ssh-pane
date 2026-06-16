@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#
+# ssh-pane — hold an interactive remote command (claude, a shell) in a tmux
+# pane that SURVIVES the box going away. When the connection drops or the
+# server shuts down overnight, it waits for the host to come back and
+# reconnects automatically — no manual re-ssh, no fzf, no cd. Quit the remote
+# command normally (exit / Ctrl-D) and the pane returns to your local shell.
+#
+# Usage: ssh-pane HOST REMOTE_DIR REMOTE_CMD
+#   REMOTE_CMD runs on the remote after `cd REMOTE_DIR` ($SHELL expands there).
+#
+# Used by tmux-start --ssh.
+
+set -u
+HOST="${1:?usage: ssh-pane HOST REMOTE_DIR REMOTE_CMD}"
+DIR="${2:?}"
+CMD="${3:?}"
+
+# Share one connection across panes; ServerAlive* makes ssh notice a dead link
+# within ~90s and exit, so we reconnect promptly instead of hanging on a black
+# screen waiting for TCP to time out.
+CTL="$HOME/.ssh/cm-ssh-pane-%r@%h:%p"
+OPTS=(-o ControlMaster=auto -o "ControlPath=$CTL" -o ControlPersist=60
+      -o ServerAliveInterval=30 -o ServerAliveCountMax=3)
+
+# How long to keep polling a down host before giving up (seconds; 0 = forever),
+# and how often to poll. Default 15m covers a crash-reboot; if it's still down
+# after that the box won't be back today, so we close the session (below).
+# Overridable via env so you don't have to edit this file.
+WAIT_TIMEOUT="${SSH_PANE_WAIT_TIMEOUT:-900}"
+POLL="${SSH_PANE_POLL:-5}"
+
+c() { printf '\033[%sm%s\033[0m\n' "$1" "$2"; }   # colour helper
+trap 'echo; exit 130' INT                          # Ctrl-C breaks the wait loop
+
+reachable() { ssh "${OPTS[@]}" -o ConnectTimeout=5 -o BatchMode=yes "$HOST" true 2>/dev/null; }
+
+while true; do
+    if ! reachable; then
+        c '1;33' "$HOST is down"
+        SECONDS=0                                  # bash builtin: seconds since reset
+        until reachable; do
+            if (( WAIT_TIMEOUT > 0 && SECONDS >= WAIT_TIMEOUT )); then
+                # Still down after the cap: not coming back today — close the
+                # whole tmux session rather than leaving dead panes around.
+                c '1;31' "✗  $HOST down for $((WAIT_TIMEOUT/60))m — closing session."
+                sleep 2
+                [ -n "${TMUX:-}" ] && tmux kill-session
+                exit 1
+            fi
+            sleep "$POLL"
+        done
+        c '2'    "✓  $HOST is up"
+        sleep 1
+    fi
+
+    clear
+    ssh "${OPTS[@]}" -t "$HOST" "cd \"$DIR\" && $CMD"
+    rc=$?
+
+    # ssh returns 255 for its OWN failures (drop, refused, host down). Any other
+    # code is the remote command's exit — i.e. you quit on purpose, so we stop.
+    [ "$rc" -ne 255 ] && exit "$rc"
+    c '1;33' "⟳  connection lost — reconnecting…"
+    sleep 1
+done
