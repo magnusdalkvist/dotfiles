@@ -24,10 +24,11 @@ OPTS=(-o ControlMaster=auto -o "ControlPath=$CTL" -o ControlPersist=60
       -o ServerAliveInterval=30 -o ServerAliveCountMax=3)
 
 # How long to keep polling a down host before giving up (seconds; 0 = forever),
-# and how often to poll. Default 15m covers a crash-reboot; if it's still down
-# after that the box won't be back today, so we close the session (below).
-# Overridable via env so you don't have to edit this file.
-WAIT_TIMEOUT="${SSH_PANE_WAIT_TIMEOUT:-900}"
+# and how often to poll. Default is forever: the box closes overnight and we
+# keep waiting so you can pick up where you left off when it's back. Set a
+# positive value (or SSH_PANE_WAIT_TIMEOUT) to auto-close the session after a
+# host stays down that long.
+WAIT_TIMEOUT="${SSH_PANE_WAIT_TIMEOUT:-0}"
 POLL="${SSH_PANE_POLL:-5}"
 
 c() { printf '\033[%sm%s\033[0m\n' "$1" "$2"; }   # colour helper
@@ -35,8 +36,15 @@ trap 'echo; exit 130' INT                          # Ctrl-C breaks the wait loop
 
 reachable() { ssh "${OPTS[@]}" -o ConnectTimeout=5 -o BatchMode=yes "$HOST" true 2>/dev/null; }
 
+# Record the host's reachability on the session so tmux-session-overview can
+# flag it: @ssh_down holds the host name while down, and is unset once back up.
+# Both panes run ssh-pane against the same host, so they set/clear it in step.
+mark_down() { [ -n "${TMUX:-}" ] && tmux set-option @ssh_down "$HOST" 2>/dev/null; }
+mark_up()   { [ -n "${TMUX:-}" ] && tmux set-option -u @ssh_down 2>/dev/null; }
+
 while true; do
     if ! reachable; then
+        mark_down
         c '1;33' "$HOST is down"
         SECONDS=0                                  # bash builtin: seconds since reset
         until reachable; do
@@ -51,6 +59,7 @@ while true; do
             sleep "$POLL"
         done
         c '2'    "✓  $HOST is up"
+        mark_up
         sleep 1
     fi
 

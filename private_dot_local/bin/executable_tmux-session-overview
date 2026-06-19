@@ -22,12 +22,37 @@ GUTTER="   "
 detect_claude_state() {
     local target="$1"
     local content
-    content=$(tmux capture-pane -p -t "$target" 2>/dev/null | tail -12)
+    content=$(tmux capture-pane -p -t "$target" 2>/dev/null | tail -16)
+
+    # Order matters. The persistent footer — e.g.
+    #   ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt
+    #   ⏸ plan mode on (shift+tab to cycle)
+    # is on screen in almost every state, so "shift+tab to cycle" alone can't
+    # mean idle. We test the most specific signals first and fall through to the
+    # bare idle footer last.
+
+    # 1) Waiting on the user. Keep these markers UI-only and rare in prose —
+    #    matching phrases like "do you want to proceed?" would false-positive on
+    #    Claude's own on-screen text and flag a busy pane as "needs answer".
     if echo "$content" | grep -qiE 'esc to cancel|tab to amend'; then
         echo "question"
+
+    # 2) Working. "esc to interrupt" is the usual marker, but while subagents
+    #    run the live agent tree (● main / ◯ Agent) is drawn BELOW the footer
+    #    and the interrupt hint can scroll off — leaving only "shift+tab to
+    #    cycle", which would otherwise read as idle. So also treat the live
+    #    timer+token meter ("57s · ↓ 42.5k tokens", "(1m 26s · ↑ … tokens)") as
+    #    working: it only appears while something is actively running. Likewise
+    #    catch the context-compaction spinner.
     elif echo "$content" | grep -qi 'esc to interrupt'; then
         echo "working"
-    elif echo "$content" | grep -qiE 'for shortcuts|shift.tab to cycle|← for agents'; then
+    elif echo "$content" | grep -qE '(↑|↓)[[:space:]]*[0-9][0-9.]*k?[[:space:]]*tokens'; then
+        echo "working"
+    elif echo "$content" | grep -qiE 'compacting|summarizing conversation'; then
+        echo "working"
+
+    # 3) Idle, ready for input — any mode banner or shortcut hint.
+    elif echo "$content" | grep -qiE 'for shortcuts|shift.tab to cycle|for agents|for newline'; then
         echo "ready"
     else
         echo "active"
@@ -132,13 +157,17 @@ build_frame() {
     # other marker. Every column is therefore the same width regardless of which
     # session is selected, so switching the current session never shifts the
     # layout. Panes use one uniform indent for the same reason.
-    while IFS=: read -r sname; do
+    while IFS=$'\t' read -r sname sdown; do
         if [[ "$sname" == "$current_session" ]]; then
             block="${PINK}${BOLD}${sname}${RESET}"
             current_idx=$cidx
         else
             block="${BOLD}${WHITE}${sname}${RESET}"
         fi
+        # ssh-pane sets @ssh_down to the host name while its dev box is
+        # unreachable; flag it with a yellow ⚠ prefix while leaving the name in
+        # its normal colour (pink = current session, white = the rest).
+        [[ -n "$sdown" ]] && block="${YELLOW}${BOLD}⚠ ${RESET}${block}"
         CLICK_MAP["$cidx:0"]="session:$sname"
         lineno=1
 
@@ -159,7 +188,7 @@ build_frame() {
             _w=$(vislen "$_l"); (( _w > colw )) && colw=$_w
         done
         ((cidx++))
-    done < <(tmux list-sessions -F "#{session_name}" 2>/dev/null)
+    done < <(tmux list-sessions -F "#{session_name}	#{@ssh_down}" 2>/dev/null)
 
     # Fit the columns to the pane, scrolling when there are too many to show.
     # A row is: LEFT_MARGIN cells (the ‹ marker), then VISIBLE session columns
