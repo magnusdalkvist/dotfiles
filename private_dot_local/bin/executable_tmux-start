@@ -51,10 +51,13 @@ if (( SSH_MODE )); then
     SSH_CTL="$HOME/.ssh/cm-tmux-start-%r@%h:%p"
     SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=$SSH_CTL" -o ControlPersist=60)
 
-    # ~ and * expand on the remote; trailing slash stripped for clean basenames.
-    mapfile -t REPOS < <(ssh "${SSH_OPTS[@]}" "$HOST" "ls -1d $ROOT/*/ 2>/dev/null" | sed 's#/*$##')
+    # First line is $ROOT itself (resolved to an absolute path via pwd) so you
+    # can open the whole "code" folder, not just a project inside it; the rest
+    # are its subfolders. ~ and * expand on the remote; trailing slash stripped
+    # for clean basenames. `cd $ROOT` failing (missing root) yields no output.
+    mapfile -t REPOS < <(ssh "${SSH_OPTS[@]}" "$HOST" "cd $ROOT && pwd && ls -1d $ROOT/*/ 2>/dev/null" | sed 's#/*$##')
     if (( ${#REPOS[@]} == 0 )); then
-        echo "No directories found in $ROOT on $HOST" >&2
+        echo "No directory $ROOT on $HOST" >&2
         exit 1
     fi
 
