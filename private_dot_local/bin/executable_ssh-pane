@@ -32,7 +32,18 @@ WAIT_TIMEOUT="${SSH_PANE_WAIT_TIMEOUT:-0}"
 POLL="${SSH_PANE_POLL:-5}"
 
 c() { printf '\033[%sm%s\033[0m\n' "$1" "$2"; }   # colour helper
-trap 'echo; exit 130' INT                          # Ctrl-C breaks the wait loop
+
+# A remote TUI (claude) that dies with the connection never gets to send the
+# sequences that turn OFF mouse reporting, the alt screen, etc., so the LOCAL
+# terminal is left in mouse-report mode — every mouse move then pastes
+# "\e[<35;..M" codes into the shell. Clear those modes ourselves whenever an
+# ssh session ends. Covers X10/normal/button/any-motion mouse tracking, SGR &
+# urxvt extended coordinates, bracketed paste, and restores the cursor.
+reset_term() {
+    printf '\033[?1000l\033[?1002l\033[?1003l\033[?1005l\033[?1006l\033[?1015l\033[?2004l\033[?25h'
+}
+
+trap 'reset_term; echo; exit 130' INT              # Ctrl-C breaks the wait loop
 
 reachable() { ssh "${OPTS[@]}" -o ConnectTimeout=5 -o BatchMode=yes "$HOST" true 2>/dev/null; }
 
@@ -66,10 +77,20 @@ while true; do
     clear
     ssh "${OPTS[@]}" -t "$HOST" "cd \"$DIR\" && $CMD"
     rc=$?
+    reset_term          # undo any mouse/alt-screen modes a killed remote TUI left on
 
-    # ssh returns 255 for its OWN failures (drop, refused, host down). Any other
-    # code is the remote command's exit — i.e. you quit on purpose, so we stop.
-    [ "$rc" -ne 255 ] && exit "$rc"
+    # Decide reconnect vs. stop:
+    #   0            → the command exited cleanly, you quit on purpose → stop.
+    #   255          → ssh's OWN failure (drop, refused, host down)    → reconnect.
+    #   other non-0  → ambiguous: the remote command reported an error. If the
+    #                  box is gone, the link died mid-session (e.g. claude taken
+    #                  down by the hangup, its `|| claude` fallback masking 255
+    #                  as a plain non-zero) → reconnect. If the host still
+    #                  answers, the command really failed on its own → stop.
+    [ "$rc" -eq 0 ] && exit 0
+    if [ "$rc" -ne 255 ] && reachable; then
+        exit "$rc"
+    fi
     c '1;33' "⟳  connection lost — reconnecting…"
     sleep 1
 done
