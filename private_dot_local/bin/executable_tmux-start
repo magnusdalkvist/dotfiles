@@ -82,7 +82,11 @@ if (( SSH_MODE )); then
     # `claude --continue` resumes the last conversation in the repo (your restart
     # point after a reboot); `|| claude` covers the first launch when there's
     # nothing to resume yet. $SHELL is single-quoted so it expands on the remote.
-    REMOTE_CLAUDE="$(build_pane '$SHELL -lc "claude --continue || claude"')"
+    # After claude quits, `exec $SHELL -l` drops you into an interactive remote
+    # shell in the SAME repo dir — so `exit` in claude leaves you on the dev box,
+    # not back on your laptop. (exec at the end of -lc reuses the TTY, so this
+    # shell is interactive just like the terminal pane.)
+    REMOTE_CLAUDE="$(build_pane '$SHELL -lc "claude --continue || claude; exec $SHELL -l"')"
     REMOTE_TERM="$(build_pane 'exec $SHELL -l')"
 fi
 
