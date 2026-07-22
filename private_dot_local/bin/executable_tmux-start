@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+# Shared --ssh helpers (config parse + remote repo picker + pane commands).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tmux-ssh-lib.sh
+source "$SCRIPT_DIR/tmux-ssh-lib.sh"
+
 # Parse args: --ssh opens the claude + terminal panes on a remote dev box
 # (configured in ~/.config/tmux-start.conf); any other arg is the session name.
 SSH_MODE=0
@@ -16,78 +21,8 @@ REMOTE_CLAUDE=""
 REMOTE_TERM=""
 
 if (( SSH_MODE )); then
-    if (( BASH_VERSINFO[0] < 4 )); then
-        echo "tmux-start --ssh requires bash 4+. On macOS: brew install bash" >&2
-        exit 1
-    fi
-    command -v fzf &>/dev/null || { echo "tmux-start --ssh requires fzf" >&2; exit 1; }
-
-    CONF="${XDG_CONFIG_HOME:-$HOME/.config}/tmux-start.conf"
-    if [[ ! -f "$CONF" ]]; then
-        echo "No remote config at $CONF" >&2
-        echo "Create it with:" >&2
-        echo "  host=your-ssh-host   # alias from ~/.ssh/config, or user@host" >&2
-        echo "  root=~/code          # remote dir whose subfolders are your repos" >&2
-        exit 1
-    fi
-
-    trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
-
-    HOST="" ROOT=""
-    while IFS='=' read -r key val; do
-        key="$(trim "$key")"
-        [[ -z "$key" || "$key" == \#* ]] && continue
-        val="$(trim "$val")"
-        case "$key" in
-            host) HOST="$val" ;;
-            root) ROOT="$val" ;;
-        esac
-    done < "$CONF"
-
-    [[ -z "$HOST" ]] && { echo "No 'host=' line in $CONF" >&2; exit 1; }
-    ROOT="${ROOT:-~/code}"
-
-    # Share one connection across the listing + both panes (no repeated auth).
-    SSH_CTL="$HOME/.ssh/cm-tmux-start-%r@%h:%p"
-    SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=$SSH_CTL" -o ControlPersist=60)
-
-    # First line is $ROOT itself (resolved to an absolute path via pwd) so you
-    # can open the whole "code" folder, not just a project inside it; the rest
-    # are its subfolders. ~ and * expand on the remote; trailing slash stripped
-    # for clean basenames. `cd $ROOT` failing (missing root) yields no output.
-    mapfile -t REPOS < <(ssh "${SSH_OPTS[@]}" "$HOST" "cd $ROOT && pwd && ls -1d $ROOT/*/ 2>/dev/null" | sed 's#/*$##')
-    if (( ${#REPOS[@]} == 0 )); then
-        echo "No directory $ROOT on $HOST" >&2
-        exit 1
-    fi
-
-    REPO=$(printf '%s\n' "${REPOS[@]}" | fzf --prompt="$HOST repo> " --delimiter=/ --with-nth=-1)
-    [[ -z "$REPO" ]] && { echo "No selection." >&2; exit 1; }
-
-    NAME="$(basename "$REPO")"
-    BASE="${BASE:-${NAME//[.:]/-}}"
-
-    # Build the commands typed into each remote pane, wrapped in ssh-pane so a
-    # dropped connection or overnight server shutdown auto-reconnects instead of
-    # dumping you back to a dead local shell. %q escapes each arg for the local
-    # pane shell so $SHELL and the path pass through ssh-pane to the remote
-    # shell intact.
-    build_pane() {
-        printf 'ssh-pane %q %q %q' "$HOST" "$REPO" "$1"
-    }
-    # Run claude through a login shell so the remote PATH (claude lives in
-    # ~/.local/bin, added by .profile) is loaded; a bare `ssh host claude` uses a
-    # non-login shell and can't find it. Login-only (-l) — NOT interactive (-i),
-    # which fights the TTY for job control and kills the claude TUI on startup.
-    # `claude --continue` resumes the last conversation in the repo (your restart
-    # point after a reboot); `|| claude` covers the first launch when there's
-    # nothing to resume yet. $SHELL is single-quoted so it expands on the remote.
-    # After claude quits, `exec $SHELL -l` drops you into an interactive remote
-    # shell in the SAME repo dir — so `exit` in claude leaves you on the dev box,
-    # not back on your laptop. (exec at the end of -lc reuses the TTY, so this
-    # shell is interactive just like the terminal pane.)
-    REMOTE_CLAUDE="$(build_pane '$SHELL -lc "claude --continue || claude; exec $SHELL -l"')"
-    REMOTE_TERM="$(build_pane 'exec $SHELL -l')"
+    # Picks the remote repo and sets HOST/REPO/NAME/BASE/REMOTE_CLAUDE/REMOTE_TERM.
+    tmux_ssh_select "$BASE" || exit 1
 fi
 
 BASE="${BASE:-main}"

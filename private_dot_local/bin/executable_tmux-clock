@@ -35,6 +35,9 @@ glyph() {
 }
 
 while [[ -f "$FLAGFILE" ]]; do
+    # Keep this pane pinned to 7 lines even after a manual resize or a re-attach
+    # from a differently-sized terminal. A no-op in a single-pane window.
+    tmux resize-pane -t "$TMUX_PANE" -y 7 2>/dev/null
     cols=$(tmux display -p -t "$TMUX_PANE" '#{pane_width}' 2>/dev/null)
     rows=$(tmux display -p -t "$TMUX_PANE" '#{pane_height}' 2>/dev/null)
     timestr=$(date '+%H:%M')

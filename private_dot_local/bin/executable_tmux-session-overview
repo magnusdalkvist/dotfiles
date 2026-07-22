@@ -127,23 +127,42 @@ colw=0
 FRAME=""
 
 LEFT_MARGIN=2          # cells reserved at the left edge for the ‹ scroll marker
-CROWD_CAP=16           # cap on column width once scrolling is needed
 VIEW_START=0           # absolute index of the leftmost visible session column
 VISIBLE=0              # number of session columns currently on screen
 MARK_L="‹"             # hidden-sessions-to-the-left marker
 MARK_R="›"             # hidden-sessions-to-the-right marker
+CURRENT_SESSION=""     # this overview's own session (set by build_frame)
+
+# "[+]" new-session button: pinned to the top-right corner (first line).
+# build_frame recomputes its click range each redraw from the pane width; an
+# empty range (X1 > X2) means it isn't shown (pane too narrow). ASCII-only so
+# the character count equals the on-screen column count, keeping hit-testing
+# exact.
+NEW_BTN_TXT="[+]"
+NEW_BTN_Y=1            # terminal line it sits on (first content line)
+NEW_BTN_X1=1           # 1-indexed mouse_x start (X1 > X2 ⇒ hidden)
+NEW_BTN_X2=0
+
+# Scroll markers (‹ ›) sit on the title row at the far left / right edges when
+# sessions are hidden off-screen. Clicking either cycles sessions like ←/→.
+# build_frame refreshes these each redraw.
+MARK_Y=2               # title row (grid row 0 → mouse_y 2)
+MARK_L_ON=0            # is ‹ currently shown? (hidden sessions to the left)
+MARK_R_ON=0            # is › currently shown? (hidden sessions to the right)
+MARK_R_X=0             # 1-indexed column of › (‹ is always at column 1)
 
 # Build the printable frame and the click map for the current tmux state.
-# The grid starts on terminal line 2 (1-indexed): line 1 is a blank spacer (the
-# "sessions" label now lives in the pane border). Each grid row r maps to
-# mouse_y = r + 2. Within a row, column c's content spans mouse_x in
-# [2 + c*(colw+3), that + colw).
+# The grid starts on terminal line 2 (1-indexed): line 1 holds only the
+# top-right "[+]" button (the "sessions" label lives in the pane border). Each
+# grid row r maps to mouse_y = r + 2. Within a row, column c's content spans
+# mouse_x in [2 + c*(colw+3), that + colw).
 build_frame() {
     local current_session sname widx pidx pcmd block lineno _l _w cidx=0 current_idx=0
     # Anchor to this pane's own session so each overview highlights (and scrolls
     # to) itself deterministically, regardless of which client is where.
     current_session=$(tmux display-message -p -t "${TMUX_PANE:-}" '#S' 2>/dev/null)
     [[ -n "$current_session" ]] || current_session=$(tmux display-message -p '#S' 2>/dev/null)
+    CURRENT_SESSION="$current_session"
 
     CLICK_MAP=()
     COLS_BLOCKS=()
@@ -192,29 +211,23 @@ build_frame() {
 
     # Fit the columns to the pane, scrolling when there are too many to show.
     # A row is: LEFT_MARGIN cells (the ‹ marker), then VISIBLE session columns
-    # each colw wide separated by GUTTER (3), then an optional › marker. If every
-    # column fits we show them all at natural width (full names); otherwise we cap
-    # the width to surface more columns and scroll a window that always keeps the
-    # current session on screen. Hidden columns are flagged ‹ / › and reached by
-    # clicking a visible session or pressing ←/→.
+    # each colw wide separated by GUTTER (3), then an optional › marker. Every
+    # column is shown at its full natural width so session content (e.g. "claude
+    # [needs answer]") is never truncated; whatever doesn't fit is reached by
+    # scrolling (‹ ›) a window that always keeps the current session on screen.
     local ncols=${#COLS_BLOCKS[@]} pane_w hard stride max_start
     pane_w=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_width}' 2>/dev/null)
     [[ "$pane_w" =~ ^[0-9]+$ ]] || pane_w=$(tput cols 2>/dev/null)
     [[ "$pane_w" =~ ^[0-9]+$ ]] || pane_w=80
     (( ncols < 1 )) && ncols=1
 
-    # No single column may exceed the pane (minus the left margin and a › cell).
+    # A single column still can't exceed the pane (minus the left margin and a ›
+    # cell) — but we never shrink columns just to pack more of them in.
     hard=$(( pane_w - LEFT_MARGIN - 1 )); (( hard < 4 )) && hard=4
     (( colw > hard )) && colw=$hard
 
     stride=$(( colw + 3 ))
     VISIBLE=$(( (pane_w - LEFT_MARGIN) / stride )); (( VISIBLE < 1 )) && VISIBLE=1
-    if (( VISIBLE < ncols )); then
-        # Crowded: cap width to show more columns, then recompute the count.
-        (( colw > CROWD_CAP )) && colw=$CROWD_CAP
-        stride=$(( colw + 3 ))
-        VISIBLE=$(( (pane_w - LEFT_MARGIN) / stride )); (( VISIBLE < 1 )) && VISIBLE=1
-    fi
     (( VISIBLE > ncols )) && VISIBLE=$ncols
 
     # Slide the viewport only as far as needed to keep the current session in it.
@@ -228,8 +241,27 @@ build_frame() {
     (( VIEW_START > 0 )) && hidden_left=1
     (( VIEW_START + VISIBLE < ncols )) && hidden_right=1
 
+    # Expose the scroll-marker state for the click handler. › hugs the right edge
+    # (one column in, to dodge the last-column wrap); ‹ is always at column 1.
+    MARK_L_ON=$hidden_left
+    MARK_R_ON=$hidden_right
+    MARK_R_X=$(( pane_w - 1 ))
+
+    # Pin the "[+]" button to the top-right corner, one column in from the right
+    # edge to avoid a line wrap. Hidden only if the pane is too narrow to fit it.
+    NEW_BTN_X1=1; NEW_BTN_X2=0
+    if (( pane_w >= LEFT_MARGIN + ${#NEW_BTN_TXT} + 1 )); then
+        NEW_BTN_X2=$(( pane_w - 1 ))
+        NEW_BTN_X1=$(( NEW_BTN_X2 - ${#NEW_BTN_TXT} + 1 ))
+    fi
+
     FRAME=$(
-        printf "\n"
+        # First line: blank apart from the top-right "[+]" new-session button.
+        if (( NEW_BTN_X2 >= NEW_BTN_X1 )); then
+            printf '%*s%s%s%s\n' "$(( NEW_BTN_X1 - 1 ))" "" "$GREEN" "$NEW_BTN_TXT" "$RESET"
+        else
+            printf "\n"
+        fi
         for (( r = 0; r < maxrows; r++ )); do
             # Left margin (2 cells); the ‹ marker shows on the top row only.
             if (( r == 0 && hidden_left )); then
@@ -242,13 +274,14 @@ build_frame() {
                 IFS=$'\x01' read -ra lines <<< "${COLS_BLOCKS[ci]}"
                 cell="$(clip "${lines[r]:-}" "$colw")"
                 pad=$(( colw - $(vislen "$cell") )); (( pad < 0 )) && pad=0
-                if (( j == VISIBLE - 1 && r == 0 && hidden_right )); then
-                    # › replaces the trailing gutter on the top row.
-                    printf '%s%*s %s%s%s' "$cell" "$pad" "" "$GRAY" "$MARK_R" "$RESET"
-                else
-                    printf '%s%*s%s' "$cell" "$pad" "" "$GUTTER"
-                fi
+                printf '%s%*s%s' "$cell" "$pad" "" "$GUTTER"
             done
+            # › hugs the right wall on the title row when sessions are hidden to
+            # the right: pad from the end of the columns out to column pane_w-1.
+            if (( r == 0 && hidden_right )); then
+                rpad=$(( pane_w - 2 - LEFT_MARGIN - VISIBLE * stride )); (( rpad < 0 )) && rpad=0
+                printf '%*s%s%s%s' "$rpad" "" "$GRAY" "$MARK_R" "$RESET"
+            fi
             printf "\n"
         done
     )
@@ -279,8 +312,37 @@ handle_nav() {
 # Map a click at (x, y) — 1-indexed terminal cells — to a tmux target and jump.
 # Columns begin after the LEFT_MARGIN, and only VISIBLE of them are on screen
 # starting at VIEW_START, so the visible column index is offset into the full set.
+# Pop the "new session" menu (local grid vs ssh grid) on the client viewing
+# this overview. Mirrors the prefix+N binding in ~/.tmux.conf. The ssh option
+# runs in a popup because its fzf picker needs a TTY.
+#
+# -M makes this script-opened menu handle mouse events (by default only menus
+# opened from a mouse key binding do), and -O keeps it open when the button is
+# released off-menu — without both, the stray mouse-up from the click that
+# opened it would immediately dismiss it before you can pick an item.
+open_new_menu() {
+    local client
+    client=$(tmux list-clients -t "$CURRENT_SESSION" -F '#{client_name}' 2>/dev/null | head -1)
+    local -a copt=()
+    [[ -n "$client" ]] && copt=(-c "$client")
+    tmux display-menu "${copt[@]}" -O -M -x C -y C -T " New session " \
+        "Local grid" l "run-shell -b tmux-start" \
+        "SSH grid"   s "display-popup -E -w 60% -h 70% 'tmux-start --ssh'" \
+        2>/dev/null
+}
+
 handle_click() {
     local x="$1" y="$2" r stride rel c off target s rest w p
+    # The "[+]" new-session button in the top-right corner (first line).
+    if (( y == NEW_BTN_Y && x >= NEW_BTN_X1 && x <= NEW_BTN_X2 )); then
+        open_new_menu
+        return
+    fi
+    # Scroll markers on the title row cycle sessions like the ←/→ keys.
+    if (( y == MARK_Y )); then
+        if (( MARK_L_ON && x <= LEFT_MARGIN )); then handle_nav left;  return; fi
+        if (( MARK_R_ON && x >= MARK_R_X ));    then handle_nav right; return; fi
+    fi
     r=$(( y - 2 ))
     (( r < 0 )) && return
     stride=$(( colw + 3 ))
@@ -314,12 +376,21 @@ handle_click() {
 
 # Hide cursor and enable SGR mouse reporting while drawing; restore on exit.
 # Ctrl+C / SIGTERM exit, which fires the EXIT trap to restore the terminal.
-cleanup() { printf '\033[?1000l\033[?1006l\033[?25h\033[2J\033[H'; }
+# Save the tty mode too, so cleanup can put it back.
+SAVED_STTY=$(stty -g 2>/dev/null)
+cleanup() {
+    printf '\033[?1000l\033[?1006l\033[?25h\033[2J\033[H'
+    [[ -n "$SAVED_STTY" ]] && stty "$SAVED_STTY" 2>/dev/null
+}
 trap cleanup EXIT
 trap 'exit 0' INT TERM
 
 # Mouse clicks only reach this program when tmux mouse mode is on.
 tmux set -g mouse on 2>/dev/null
+# Turn off echo + canonical mode for the WHOLE run, not just inside each
+# `read -s`. Otherwise keystrokes pressed during the (relatively slow)
+# build_frame between reads get echoed into the pane as raw escapes like "^[[C".
+stty -echo -icanon min 1 time 0 2>/dev/null
 printf '\033[?25l\033[?1000h\033[?1006h\033[2J'
 
 # The leading '<' is consumed as ch3 before seq is built, so it is NOT part of
@@ -327,6 +398,9 @@ printf '\033[?25l\033[?1000h\033[?1006h\033[2J'
 mouse_re='^([0-9]+);([0-9]+);([0-9]+)([Mm])$'
 
 while true; do
+    # Keep this pane pinned to 7 lines even after a manual resize or a re-attach
+    # from a differently-sized terminal. A no-op in a single-pane window.
+    tmux resize-pane -t "${TMUX_PANE:-}" -y 7 2>/dev/null
     build_frame
 
     # Redraw in place: home cursor, clear each line as we overwrite it,
