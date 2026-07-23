@@ -127,6 +127,8 @@ colw=0
 FRAME=""
 
 LEFT_MARGIN=2          # cells reserved at the left edge for the ‹ scroll marker
+COL_TARGET=25          # desired per-column width; the pane is divided into a
+                       # whole number of columns at least this wide
 VIEW_START=0           # absolute index of the leftmost visible session column
 VISIBLE=0              # number of session columns currently on screen
 MARK_L="‹"             # hidden-sessions-to-the-left marker
@@ -203,31 +205,31 @@ build_frame() {
         COLS_BLOCKS+=("$block")
         IFS=$'\x01' read -ra _lines <<< "$block"
         (( ${#_lines[@]} > maxrows )) && maxrows=${#_lines[@]}
-        for _l in "${_lines[@]}"; do
-            _w=$(vislen "$_l"); (( _w > colw )) && colw=$_w
-        done
         ((cidx++))
     done < <(tmux list-sessions -F "#{session_name}	#{@ssh_down}" 2>/dev/null)
 
-    # Fit the columns to the pane, scrolling when there are too many to show.
-    # A row is: LEFT_MARGIN cells (the ‹ marker), then VISIBLE session columns
-    # each colw wide separated by GUTTER (3), then an optional › marker. Every
-    # column is shown at its full natural width so session content (e.g. "claude
-    # [needs answer]") is never truncated; whatever doesn't fit is reached by
-    # scrolling (‹ ›) a window that always keeps the current session on screen.
-    local ncols=${#COLS_BLOCKS[@]} pane_w hard stride max_start
+    # A row is: LEFT_MARGIN cells (the ‹ marker), then VISIBLE session columns,
+    # each colw wide followed by a GUTTER (3), then one cell for the › marker.
+    local ncols=${#COLS_BLOCKS[@]} pane_w avail fit stride max_start
     pane_w=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_width}' 2>/dev/null)
     [[ "$pane_w" =~ ^[0-9]+$ ]] || pane_w=$(tput cols 2>/dev/null)
     [[ "$pane_w" =~ ^[0-9]+$ ]] || pane_w=80
     (( ncols < 1 )) && ncols=1
 
-    # A single column still can't exceed the pane (minus the left margin and a ›
-    # cell) — but we never shrink columns just to pack more of them in.
-    hard=$(( pane_w - LEFT_MARGIN - 1 )); (( hard < 4 )) && hard=4
-    (( colw > hard )) && colw=$hard
+    # Fixed, uniform column width derived purely from the pane width — NOT from
+    # the content. Within the width available for columns (the pane minus the
+    # left margin and one cell kept free at the right for the › marker), fit as
+    # many COL_TARGET-wide columns (+3 gutter each) as possible, then widen them
+    # evenly to fill it and give every session that same width. So the layout
+    # stays put when a session's status text changes length, and colw depends
+    # only on pane_w — adding/removing sessions never rejiggers the width.
+    # Sessions beyond what fits are reached by scrolling (‹ ›).
+    avail=$(( pane_w - LEFT_MARGIN - 1 )); (( avail < 7 )) && avail=7
+    fit=$(( avail / (COL_TARGET + 3) )); (( fit < 1 )) && fit=1
+    colw=$(( avail / fit - 3 )); (( colw < 4 )) && colw=4
 
     stride=$(( colw + 3 ))
-    VISIBLE=$(( (pane_w - LEFT_MARGIN) / stride )); (( VISIBLE < 1 )) && VISIBLE=1
+    VISIBLE=$fit
     (( VISIBLE > ncols )) && VISIBLE=$ncols
 
     # Slide the viewport only as far as needed to keep the current session in it.
@@ -407,10 +409,10 @@ while true; do
     # then clear anything left below from a previous, taller frame.
     printf '\033[H%s%s\033[J' "${FRAME//$'\n'/$CLR_EOL$'\n'}" "$CLR_EOL"
 
-    # Wait up to 1s for input.
+    # Wait up to 0.5s for input, then refresh (keeps status reasonably live).
     # Mouse: ESC [ < btn ; x ; y M  — left-click jumps to session/pane.
     # Keyboard: ESC [ C (right) / ESC [ D (left) — cycle sessions.
-    if IFS= read -rsn1 -t 1 ch; then
+    if IFS= read -rsn1 -t 0.5 ch; then
         if [[ "$ch" == "$ESC" ]]; then
             IFS= read -rsn1 -t 0.05 ch2
             if [[ "$ch2" == "[" ]]; then
