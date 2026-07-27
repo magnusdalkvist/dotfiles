@@ -168,6 +168,7 @@ build_frame() {
 
     CLICK_MAP=()
     COLS_BLOCKS=()
+    COL_ROWS=()
     maxrows=0
     colw=0
 
@@ -204,6 +205,7 @@ build_frame() {
 
         COLS_BLOCKS+=("$block")
         IFS=$'\x01' read -ra _lines <<< "$block"
+        COL_ROWS+=("${#_lines[@]}")
         (( ${#_lines[@]} > maxrows )) && maxrows=${#_lines[@]}
         ((cidx++))
     done < <(tmux list-sessions -F "#{session_name}	#{@ssh_down}" 2>/dev/null)
@@ -238,6 +240,23 @@ build_frame() {
     max_start=$(( ncols - VISIBLE )); (( max_start < 0 )) && max_start=0
     (( VIEW_START > max_start )) && VIEW_START=$max_start
     (( VIEW_START < 0 )) && VIEW_START=0
+
+    # Height follows only the VISIBLE columns: the tallest on-screen session sets
+    # the row count (session name + its panes). maxrows is recomputed here (over
+    # the viewport) so a taller off-screen session never inflates the height.
+    local vj vci
+    maxrows=0
+    for (( vj = 0; vj < VISIBLE; vj++ )); do
+        vci=$(( VIEW_START + vj ))
+        (( ${COL_ROWS[vci]:-0} > maxrows )) && maxrows=${COL_ROWS[vci]}
+    done
+    (( maxrows < 1 )) && maxrows=1
+    # Pane height = maxrows + 2: one line above for the top ([+]) row and one
+    # blank line below as a spacer, so the last pane entry isn't flush against
+    # the next pane's border. Net: 3 + n, where n is the pane count of the
+    # visible session with the most. The frame itself still prints maxrows + 1
+    # lines; the extra row is left blank (cleared by the trailing \033[J).
+    FRAME_HEIGHT=$(( maxrows + 2 ))
 
     local hidden_left=0 hidden_right=0
     (( VIEW_START > 0 )) && hidden_left=1
@@ -400,10 +419,12 @@ printf '\033[?25l\033[?1000h\033[?1006h\033[2J'
 mouse_re='^([0-9]+);([0-9]+);([0-9]+)([Mm])$'
 
 while true; do
-    # Keep this pane pinned to 7 lines even after a manual resize or a re-attach
-    # from a differently-sized terminal. A no-op in a single-pane window.
-    tmux resize-pane -t "${TMUX_PANE:-}" -y 7 2>/dev/null
     build_frame
+    # Size this pane to fit the frame: 2 + n rows, where n is the pane count of
+    # the visible session with the most (FRAME_HEIGHT, computed in build_frame).
+    # Re-applied every tick so a manual resize or a re-attach from a
+    # differently-sized terminal is corrected. A no-op in a single-pane window.
+    tmux resize-pane -t "${TMUX_PANE:-}" -y "${FRAME_HEIGHT:-7}" 2>/dev/null
 
     # Redraw in place: home cursor, clear each line as we overwrite it,
     # then clear anything left below from a previous, taller frame.

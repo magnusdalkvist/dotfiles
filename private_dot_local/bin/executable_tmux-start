@@ -63,8 +63,14 @@ LEFT_BOT=$(tmux split-window -v -p 80 -t "$LEFT_TOP" -P -F '#{pane_id}')
 # Right column: clock (top), terminal (bottom)
 RIGHT_BOT=$(tmux split-window -v -p 80 -t "$RIGHT_TOP" -P -F '#{pane_id}')
 
-# Pin the overview and clock panes to exactly 7 lines tall.
-tmux resize-pane -t "$LEFT_TOP" -y 7
+# Size the overview pane to the same height its TUI settles on: 3 + n rows (top
+# [+] line, n pane rows, bottom spacer), where n is this session's pane count.
+# tmux-session-overview re-applies this every tick, but starting at the right
+# size avoids a visible resize jump on launch. Using the live pane count keeps
+# it correct whether or not the clock pane is enabled.
+OVERVIEW_PANES=$(tmux list-panes -t "$SESSION" -F x 2>/dev/null | wc -l)
+tmux resize-pane -t "$LEFT_TOP" -y $(( OVERVIEW_PANES + 3 ))
+# Pin the clock pane to exactly 7 lines tall.
 tmux resize-pane -t "$RIGHT_TOP" -y 7
 
 # Label these panes so the border shows their purpose, not "bash". The claude
