@@ -99,6 +99,12 @@ Needs a Nerd Font for the bar glyphs; the configs ask for `RobotoMono Nerd Font`
 | `tmux-clock` | Big-digit foreground clock, stop with `Ctrl+C` |
 | `tmux-kill` | Kill a session by name (or current session if inside tmux) |
 | `ssh-pane` | Holds a remote pane open across drops/reboots (used by `--ssh`) |
+| `tmux-sysbar` | Status bar content — CPU/GPU/temps for this laptop, and the remote dev box |
+| `tmux-even` | Reset the current window's left/right divider to 50/50 (`prefix+=`) |
+
+`tmux-sysbar` only reports the remote box when an ssh `ControlMaster` is already
+open, so the status bar can never itself keep that instance awake — it
+piggybacks an existing connection or shows nothing.
 
 ### Layout (`tmux-start`)
 
@@ -139,6 +145,7 @@ panes. Tune with `SSH_PANE_WAIT_TIMEOUT` (seconds, `0` = forever) and
 | `Ctrl+Space` | Prefix |
 | `Ctrl+Shift+Arrow` | Move between panes (no prefix) |
 | `Prefix+Arrow` | Split in arrow direction |
+| `Prefix+=` | Even out the left/right divider |
 | `Prefix+r` | Reload config |
 
 ## Notes
