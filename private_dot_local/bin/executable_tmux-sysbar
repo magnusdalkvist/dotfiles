@@ -1,0 +1,631 @@
+#!/usr/bin/env bash
+#
+# tmux-sysbar — live CPU / GPU / temperature line for the tmux status bar.
+#
+# Usage (all three are wired up from ~/.tmux.conf):
+#   tmux-sysbar left     print the local-machine line   -> status-left
+#   tmux-sysbar right    print the mada line            -> status-right
+#   tmux-sysbar daemon   long-running sampler; everything expensive lives here
+#
+# tmux blocks its ENTIRE status redraw on #() output, and the two interesting
+# numbers are slow to get: scanning i915 fdinfo costs ~20ms and an ssh
+# round-trip ~100ms. So the bar itself never does either — it cats a file the
+# daemon refreshed in the background, and starts the daemon if it died. A stale
+# line for a couple of seconds is a much better failure mode than a bar that
+# stutters every redraw.
+#
+# The mada box powers itself off when idle, so this NEVER initiates an ssh
+# connection. It piggybacks on a ControlMaster socket that ssh-pane or
+# tmux-start --ssh already opened: no socket, no data. That way the bar can't
+# wake the instance, and can't count as the activity that keeps it (and the
+# bill) alive. "no ssh" in the bar means "you aren't connected", not "it's down".
+#
+# Hardware notes for this laptop (ThinkPad, i5-1240P + Iris Xe), because they
+# explain the layout:
+#   * The iGPU is on the CPU die and has no temperature sensor of its own. The
+#     package temp IS the GPU temp, so it's shown once, next to CPU, instead of
+#     printed twice as if they were two readings.
+#   * intel_gpu_top is unusable here: perf_event_paranoid=4 locks the i915 PMU
+#     to root. GPU busy% therefore comes from per-client fdinfo render-engine
+#     counters, which cover only our own processes — in practice everything that
+#     matters on a single-user laptop, but it will under-report another user's
+#     or a system daemon's GPU work.
+#   * mada is an EC2 instance: no GPU at all (simple-framebuffer) and the
+#     hypervisor hides every thermal sensor — its lone nvme sensor reports
+#     -273.15°C, i.e. "unsupported". Its side of the bar is usage-only by
+#     necessity, not by choice.
+
+set -u
+
+CACHE_DIR="${XDG_RUNTIME_DIR:-/tmp}/tmux-sysbar"
+LEFT_FILE="$CACHE_DIR/left"
+RIGHT_FILE="$CACHE_DIR/right"
+PID_FILE="$CACHE_DIR/pid"
+LOCK_FILE="$CACHE_DIR/lock"
+
+REMOTE_HOST="${SYSBAR_REMOTE_HOST:-mada}"
+# A fixed label for this machine, deliberately not the tmux session name: the
+# session changes as you move around, the machine being measured doesn't.
+LOCAL_LABEL="${SYSBAR_LOCAL_LABEL:-local}"
+INTERVAL="${SYSBAR_INTERVAL:-2}"                # seconds between local samples
+REMOTE_TICKS="${SYSBAR_REMOTE_TICKS:-6}"        # resample mada every N ticks
+DISCOVER_TICKS="${SYSBAR_DISCOVER_TICKS:-30}"   # full GPU-client rescan every N ticks
+
+# Palette lifted from the pane borders so the bar looks like part of the setup.
+P_ACCENT='#FF5073'
+P_DIM='#545454'
+P_LABEL='#888888'
+P_OK='#7ee787'
+P_WARN='#ffcb6b'
+P_HOT='#ff5370'
+
+SEP="#[fg=$P_DIM]│"
+
+# Colour for a value against a warn/hot threshold.
+heat() {
+    local v=${1:-0} warn=$2 hot=$3
+    v=${v%%.*}
+    if   (( v >= hot ));  then printf '%s' "$P_HOT"
+    elif (( v >= warn )); then printf '%s' "$P_WARN"
+    else                       printf '%s' "$P_OK"
+    fi
+}
+
+# Tenths-of-a-unit integer -> "8.2". Keeps the whole script off floating point,
+# which also keeps it off the locale's decimal comma.
+tenths() { printf '%d.%d' $(( ${1:-0} / 10 )) $(( ${1:-0} % 10 )); }
+
+# Monotonic clock in centiseconds. /proc/uptime is formatted by the kernel in
+# the C locale, so unlike $EPOCHREALTIME it always uses a '.' — this box runs a
+# da_DK locale where EPOCHREALTIME yields a comma and breaks ${x%.*} parsing.
+uptime_cs() {
+    local u
+    read -r u _ < /proc/uptime
+    printf '%s%s' "${u%.*}" "${u#*.}"
+}
+
+# ── sensor discovery ────────────────────────────────────────────────────────
+# hwmon and drm indices are assigned in probe order and move between boots, so
+# every path is resolved by driver name rather than hardcoded.
+
+hwmon_by_name() {
+    local d
+    for d in /sys/class/hwmon/hwmon*; do
+        [[ -r "$d/name" ]] || continue
+        [[ "$(<"$d/name")" == "$1" ]] && { printf '%s' "$d"; return 0; }
+    done
+    return 1
+}
+
+resolve_sensors() {
+    local d f lbl
+
+    # CPU package temp — the die-wide reading, which is also the iGPU's temp.
+    CPU_TEMP_FILE=""
+    if d=$(hwmon_by_name coretemp); then
+        for f in "$d"/temp*_label; do
+            [[ -r "$f" ]] || continue
+            lbl=$(<"$f")
+            [[ "$lbl" == "Package id 0" ]] && { CPU_TEMP_FILE="${f%_label}_input"; break; }
+        done
+    fi
+
+    # Fans: this chassis has two rotors; the bar reports the faster one.
+    FAN_FILES=()
+    if d=$(hwmon_by_name thinkpad); then
+        for f in "$d"/fan?_input; do
+            [[ -r "$f" ]] && FAN_FILES+=("$f")
+        done
+    fi
+
+    # i915 GT clock, as a cheap corroboration of the fdinfo busy figure.
+    GPU_FREQ_FILE=""
+    GPU_MAX_FREQ=0
+    for f in /sys/class/drm/card*/gt_cur_freq_mhz; do
+        [[ -r "$f" ]] || continue
+        GPU_FREQ_FILE="$f"
+        [[ -r "${f%cur*}max_freq_mhz" ]] && GPU_MAX_FREQ=$(<"${f%cur*}max_freq_mhz")
+        break
+    done
+}
+
+# ── local sampling ─────────────────────────────────────────────────────────
+
+PREV_CPU_TOTAL=0
+PREV_CPU_IDLE=0
+CPU_PCT=0
+
+sample_cpu() {
+    local u n s i w q sq st total idle dt di
+    read -r _ u n s i w q sq st _ < /proc/stat
+    total=$(( u + n + s + i + w + q + sq + st ))
+    idle=$(( i + w ))
+    dt=$(( total - PREV_CPU_TOTAL ))
+    di=$(( idle - PREV_CPU_IDLE ))
+    PREV_CPU_TOTAL=$total
+    PREV_CPU_IDLE=$idle
+    if (( dt > 0 )); then
+        CPU_PCT=$(( (dt - di) * 100 / dt ))
+    else
+        CPU_PCT=0
+    fi
+}
+
+# Finding which fds are GPU clients means opening every fdinfo on the box —
+# ~6000 files, ~360ms. Re-reading just the ~90 that matter costs ~20ms. So the
+# full scan runs rarely and each tick re-reads the known set.
+#
+# Doing only that, though, meant a freshly-launched GPU app stayed invisible
+# until the next full scan — measured at up to 30s of the bar flatly reporting
+# an idle GPU while ffmpeg pinned it at 98%. So each tick also does an
+# incremental pass over pids that haven't been classified yet: launching an app
+# creates a new pid, so the common case is caught on the next tick for almost
+# nothing. The periodic full scan still earns its place — it catches a
+# long-running process that opens a DRM fd only later (a browser starting
+# playback), and it drops fd paths whose process has since exited.
+GPU_FDS=()
+declare -A SEEN_PID=()
+
+gpu_scan_full() {
+    local out d
+    out=$(grep -ls '^drm-engine-render:' /proc/[0-9]*/fdinfo/* 2>/dev/null)
+    GPU_FDS=()
+    [[ -n "$out" ]] && mapfile -t GPU_FDS <<<"$out"
+    SEEN_PID=()
+    for d in /proc/[0-9]*; do
+        SEEN_PID[${d#/proc/}]=1
+    done
+}
+
+gpu_scan_new() {
+    local d p out
+    for d in /proc/[0-9]*; do
+        p=${d#/proc/}
+        [[ -v SEEN_PID[$p] ]] && continue
+        SEEN_PID[$p]=1
+        out=$(grep -ls '^drm-engine-render:' "/proc/$p/fdinfo/"* 2>/dev/null)
+        [[ -n "$out" ]] && mapfile -t -O "${#GPU_FDS[@]}" GPU_FDS <<<"$out"
+    done
+}
+
+PREV_GPU_NS=-1
+PREV_GPU_CS=0
+GPU_PCT=0
+GPU_MHZ=0
+
+sample_gpu() {
+    GPU_MHZ=0
+    [[ -n "$GPU_FREQ_FILE" && -r "$GPU_FREQ_FILE" ]] && GPU_MHZ=$(<"$GPU_FREQ_FILE")
+
+    local ns cs dns dcs
+    ns=0
+    if (( ${#GPU_FDS[@]} )); then
+        # A dup'd fd reports its client's counter again, so take the max per
+        # drm-client-id rather than summing, then sum across distinct clients.
+        #
+        # The engines are physically separate and run concurrently, so summing
+        # them would let "GPU%" exceed 100 during video playback. Report the
+        # busiest engine instead — that's the one that would bottleneck. Video
+        # and copy have to be in here at all because browser playback lands on
+        # the video engine and leaves render near idle.
+        #
+        # cat (not awk directly) because a process exiting mid-scan makes mawk
+        # abort fatally on the vanished file, while cat just skips it.
+        ns=$(cat "${GPU_FDS[@]}" 2>/dev/null | awk '
+            /^drm-client-id:/            { c = $2 }
+            /^drm-engine-render:/        { if ($2 > r[c]) r[c] = $2 }
+            /^drm-engine-video:/         { if ($2 > v[c]) v[c] = $2 }
+            /^drm-engine-video-enhance:/ { if ($2 > e[c]) e[c] = $2 }
+            /^drm-engine-copy:/          { if ($2 > y[c]) y[c] = $2 }
+            END {
+                for (k in r) tr += r[k]
+                for (k in v) tv += v[k]
+                for (k in e) te += e[k]
+                for (k in y) ty += y[k]
+                m = tr
+                if (tv > m) m = tv
+                if (te > m) m = te
+                if (ty > m) m = ty
+                printf "%.0f", m
+            }')
+        [[ -n "$ns" ]] || ns=0
+    fi
+    cs=$(uptime_cs)
+
+    if (( PREV_GPU_NS < 0 )); then
+        GPU_PCT=0
+    else
+        dns=$(( ns - PREV_GPU_NS ))
+        dcs=$(( cs - PREV_GPU_CS ))
+        # 1 centisecond = 1e7 ns, so percent = dns / (dcs * 1e5).
+        # dns goes negative for one tick when a GPU client exits and its counter
+        # leaves the sum; reporting 0 for that tick beats reporting nonsense.
+        if (( dcs > 0 && dns > 0 )); then
+            GPU_PCT=$(( dns / (dcs * 100000) ))
+            (( GPU_PCT > 100 )) && GPU_PCT=100
+        else
+            GPU_PCT=0
+        fi
+    fi
+    PREV_GPU_NS=$ns
+    PREV_GPU_CS=$cs
+}
+
+MEM_USED_T=0
+MEM_TOTAL_T=0
+sample_mem() {
+    local k v total=0 avail=0
+    while read -r k v _; do
+        case $k in
+            MemTotal:)     total=$v ;;
+            MemAvailable:) avail=$v; break ;;
+        esac
+    done < /proc/meminfo
+    MEM_USED_T=$(( (total - avail) * 10 / 1048576 ))
+    MEM_TOTAL_T=$(( total * 10 / 1048576 ))
+}
+
+CPU_TEMP=0
+FAN_RPM=0
+sample_thermal() {
+    CPU_TEMP=0
+    if [[ -n "$CPU_TEMP_FILE" && -r "$CPU_TEMP_FILE" ]]; then
+        CPU_TEMP=$(( $(<"$CPU_TEMP_FILE") / 1000 ))
+    fi
+    FAN_RPM=0
+    local f v
+    for f in ${FAN_FILES[@]+"${FAN_FILES[@]}"}; do
+        [[ -r "$f" ]] || continue
+        v=$(<"$f")
+        (( v > FAN_RPM )) && FAN_RPM=$v
+    done
+}
+
+# ── remote sampling (piggyback only — never dials out) ─────────────────────
+
+REMOTE_SNIPPET='head -1 /proc/stat; grep -E "^(MemTotal|MemAvailable):" /proc/meminfo; cat /proc/loadavg; df -P / | tail -1'
+
+# An existing, live ControlMaster socket for the host, or nothing.
+remote_socket() {
+    local s
+    for s in "$HOME/.ssh/cm-ssh-pane-${REMOTE_HOST}@"* \
+             "$HOME/.ssh/cm-tmux-start-${REMOTE_HOST}@"*; do
+        [[ -S "$s" ]] || continue
+        if ssh -O check -o ControlPath="$s" "$REMOTE_HOST" >/dev/null 2>&1; then
+            printf '%s' "$s"
+            return 0
+        fi
+    done
+    return 1
+}
+
+REMOTE_STATE=nossh          # nossh | err | ok
+PREV_R_TOTAL=0
+PREV_R_IDLE=0
+R_CPU_PCT=0
+R_MEM_USED_T=0
+R_MEM_TOTAL_T=0
+R_LOAD=""
+R_DISK=""
+
+sample_remote() {
+    local sock out l u n s i w q sq st total idle dt di mt=0 ma=0
+    if ! sock=$(remote_socket); then
+        REMOTE_STATE=nossh
+        PREV_R_TOTAL=0
+        PREV_R_IDLE=0
+        return 0
+    fi
+
+    # ControlMaster=no + a ControlPath that already exists means "use that
+    # multiplexed session or fail" — it will not fall back to a fresh dial-out.
+    out=$(timeout 5 ssh -o ControlMaster=no -o ControlPath="$sock" \
+              -o BatchMode=yes -o ConnectTimeout=3 \
+              "$REMOTE_HOST" "$REMOTE_SNIPPET" 2>/dev/null)
+    if [[ -z "$out" ]]; then
+        REMOTE_STATE=err
+        return 0
+    fi
+
+    total=0; idle=0
+    while IFS= read -r l; do
+        case $l in
+            cpu\ *)
+                read -r _ u n s i w q sq st _ <<<"$l"
+                total=$(( u + n + s + i + w + q + sq + st ))
+                idle=$(( i + w ))
+                ;;
+            MemTotal:*)     read -r _ mt _ <<<"$l" ;;
+            MemAvailable:*) read -r _ ma _ <<<"$l" ;;
+            *%*)            read -r _ _ _ _ R_DISK _ <<<"$l" ;;
+            [0-9]*)         read -r R_LOAD _ <<<"$l" ;;
+        esac
+    done <<<"$out"
+
+    if (( total == 0 )); then
+        REMOTE_STATE=err
+        return 0
+    fi
+
+    dt=$(( total - PREV_R_TOTAL ))
+    di=$(( idle - PREV_R_IDLE ))
+    if (( PREV_R_TOTAL > 0 && dt > 0 )); then
+        R_CPU_PCT=$(( (dt - di) * 100 / dt ))
+    else
+        R_CPU_PCT=0     # first sample after connecting has no baseline
+    fi
+    PREV_R_TOTAL=$total
+    PREV_R_IDLE=$idle
+
+    R_MEM_USED_T=$(( (mt - ma) * 10 / 1048576 ))
+    R_MEM_TOTAL_T=$(( mt * 10 / 1048576 ))
+    REMOTE_STATE=ok
+}
+
+# ── rendering ──────────────────────────────────────────────────────────────
+
+# Neither tmux's align=right nor its list=on machinery stops status-left and
+# status-right from overwriting each other once they don't both fit — at 100
+# columns the halves collided mid-word ("5565 rpm% cpu"). So each half is
+# rendered as an ordered list of segments, most important first, and assembled
+# to a width budget at draw time. Each line is "plain-length<TAB>styled-text":
+# the styled text is full of #[...] escapes that don't occupy cells, so its
+# printable width has to be recorded while it's still known.
+seg() { printf '%d\t%s\n' "${#1}" "$2"; }
+
+render_left_segs() {
+    local p s
+
+    # The machine label rides along with the first segment so it can never be
+    # dropped by the width fitting — an unlabelled row of numbers is ambiguous
+    # once the mada half is showing numbers too.
+    p="$LOCAL_LABEL $(printf '%3d' "$CPU_PCT")% cpu"
+    s="#[fg=$P_ACCENT]$LOCAL_LABEL #[fg=$(heat "$CPU_PCT" 60 85)]$(printf '%3d' "$CPU_PCT")%#[fg=$P_LABEL] cpu"
+    if (( CPU_TEMP > 0 )); then
+        p+=" ${CPU_TEMP}°"
+        s+=" #[fg=$(heat "$CPU_TEMP" 75 90)]${CPU_TEMP}°"
+    fi
+    seg "$p" "$s"
+
+    p=$(printf '%3d' "$GPU_PCT")"% gpu"
+    s="#[fg=$(heat "$GPU_PCT" 50 80)]$(printf '%3d' "$GPU_PCT")%#[fg=$P_LABEL] gpu"
+    if (( GPU_MHZ > 0 )); then
+        p+=" ${GPU_MHZ}MHz"
+        s+=" #[fg=$P_DIM]${GPU_MHZ}MHz"
+    fi
+    seg "$p" "$s"
+
+    p="$(tenths "$MEM_USED_T")/$(tenths "$MEM_TOTAL_T")G"
+    s="#[fg=$P_LABEL]$(tenths "$MEM_USED_T")#[fg=$P_DIM]/$(tenths "$MEM_TOTAL_T")G"
+    seg "$p" "$s"
+
+    if (( FAN_RPM > 0 )); then
+        seg "${FAN_RPM} rpm" "#[fg=$P_LABEL]${FAN_RPM}#[fg=$P_DIM] rpm"
+    fi
+}
+
+render_right_segs() {
+    local p s
+    case $REMOTE_STATE in
+        ok)
+            p="$REMOTE_HOST $(printf '%3d' "$R_CPU_PCT")% cpu"
+            s="#[fg=$P_ACCENT]$REMOTE_HOST #[fg=$(heat "$R_CPU_PCT" 60 85)]$(printf '%3d' "$R_CPU_PCT")%#[fg=$P_LABEL] cpu"
+            seg "$p" "$s"
+            p="$(tenths "$R_MEM_USED_T")/$(tenths "$R_MEM_TOTAL_T")G"
+            s="#[fg=$P_LABEL]$(tenths "$R_MEM_USED_T")#[fg=$P_DIM]/$(tenths "$R_MEM_TOTAL_T")G"
+            seg "$p" "$s"
+            seg "${R_LOAD:-?} load" "#[fg=$P_LABEL]${R_LOAD:-?}#[fg=$P_DIM] load"
+            seg "${R_DISK:-?} disk" "#[fg=$P_LABEL]${R_DISK:-?}#[fg=$P_DIM] disk"
+            ;;
+        err)
+            seg "$REMOTE_HOST unreachable" "#[fg=$P_WARN]$REMOTE_HOST #[fg=$P_DIM]unreachable"
+            ;;
+        *)
+            seg "$REMOTE_HOST · no ssh" "#[fg=$P_DIM]$REMOTE_HOST · no ssh"
+            ;;
+    esac
+}
+
+# Emit as many whole segments from $1 as fit in $2 printable cells. Always emits
+# the first segment even if the budget is hopeless — a clipped CPU reading beats
+# a blank bar, and tmux will cut the overflow itself.
+fit_segs() {
+    local file=$1 budget=$2
+    local len styled used=0 out="" cost
+    [[ -r "$file" ]] || return 0
+    while IFS=$'\t' read -r len styled; do
+        [[ -n "$len" ]] || continue
+        if [[ -z "$out" ]]; then
+            out="$styled"
+            used=$len
+            continue
+        fi
+        cost=$(( len + 3 ))            # " │ "
+        (( used + cost > budget )) && break
+        out+=" $SEP $styled"
+        used=$(( used + cost ))
+    done < "$file"
+    [[ -n "$out" ]] && printf '%s#[default]' "$out"
+}
+
+# Half the client width each, minus the session-name prefix the left half shares
+# its row with. Equal halves are fine: at a wide terminal both are well under
+# budget anyway, and at a narrow one neither should be allowed to eat the other.
+half_budget() {
+    local width=${1:-80} reserve=${2:-0} b
+    [[ "$width" =~ ^[0-9]+$ ]] || width=80
+    b=$(( (width - 2) / 2 - reserve ))
+    (( b < 8 )) && b=8
+    printf '%d' "$b"
+}
+
+# The status bar's own top line: a full-width rule that tees into the pane grid,
+# so the bar reads as a region of the same drawing rather than a stripe pasted
+# underneath. Width is passed in because tmux expands #{client_width} before
+# running this — a script has no way to know which client is being drawn.
+#
+# The junction is ┴, not ┬: vertical pane borders come down from above and stop
+# at this rule, so the stem points up into the split.
+#
+# A vertical border sits one column right of a pane's last column, so the
+# junctions are the pane_right+1 values — but only for panes that actually reach
+# the bottom row. In a stacked layout an upper pane's right edge has no border
+# down here, and teeing there would draw a junction to nothing.
+render_rule() {
+    local w=$1 sess=$2 win=$3
+    [[ "$w" =~ ^[0-9]+$ ]] && (( w > 0 )) || w=80
+
+    local -a cells
+    local i
+    for (( i = 0; i < w; i++ )); do cells[i]='─'; done
+
+    if [[ -n "$sess" && -n "$win" ]]; then
+        # Derive the socket from $TMUX rather than letting the tmux client fall
+        # back to the default one — otherwise this reports the wrong geometry
+        # whenever the bar is drawn by a server on a non-default socket.
+        local sock=${TMUX-} geom pr pb maxb=-1 c
+        sock=${sock%%,*}
+        geom=$(tmux ${sock:+-S "$sock"} list-panes -t "$sess:$win" \
+                   -F '#{pane_right} #{pane_bottom}' 2>/dev/null)
+        if [[ -n "$geom" ]]; then
+            while read -r pr pb; do
+                [[ -n "${pb:-}" ]] && (( pb > maxb )) && maxb=$pb
+            done <<<"$geom"
+            while read -r pr pb; do
+                [[ -n "${pb:-}" ]] || continue
+                (( pb == maxb )) || continue
+                c=$(( pr + 1 ))
+                # pane_right+1 == width means the pane is flush right: no border.
+                (( c > 0 && c < w )) && cells[c]='┴'
+            done <<<"$geom"
+        fi
+    fi
+
+    local IFS=''
+    printf '#[fg=%s]%s#[default]' "$P_DIM" "${cells[*]}"
+}
+
+# ── daemon ─────────────────────────────────────────────────────────────────
+
+write_atomic() {   # $1 = destination, stdin = content
+    local dest=$1
+    cat >"$dest.tmp" && mv -f "$dest.tmp" "$dest"
+}
+
+run_daemon() {
+    # flock, not a pid check, is what actually guarantees one sampler: several
+    # status panes can call ensure_daemon in the same instant.
+    exec 9>"$LOCK_FILE"
+    flock -n 9 || exit 0
+    printf '%s' "$$" >"$PID_FILE"
+    trap 'rm -f "$PID_FILE"; exit 0' TERM INT HUP
+
+    resolve_sensors
+    gpu_scan_full
+    sample_cpu          # prime the deltas so the first rendered tick is real
+    sample_gpu
+
+    local tick=0
+    while :; do
+        if (( tick % DISCOVER_TICKS == 0 )); then
+            gpu_scan_full
+        else
+            gpu_scan_new
+        fi
+        (( tick % REMOTE_TICKS == 0 )) && sample_remote
+
+        sample_cpu
+        sample_gpu
+        sample_mem
+        sample_thermal
+
+        render_left_segs  | write_atomic "$LEFT_FILE"
+        render_right_segs | write_atomic "$RIGHT_FILE"
+
+        tick=$(( tick + 1 ))
+        # 9<&- so the sleep doesn't inherit the lock fd. Without it, killing the
+        # daemon leaves an orphaned sleep holding the lock for up to $INTERVAL,
+        # and a replacement started in that window loses flock and exits.
+        sleep "$INTERVAL" 9<&-
+
+        # Nothing left to draw for — don't linger as an orphan burning battery.
+        tmux has-session >/dev/null 2>&1 || break
+    done
+    rm -f "$PID_FILE"
+}
+
+ensure_daemon() {
+    local pid
+    if [[ -r "$PID_FILE" ]]; then
+        pid=$(<"$PID_FILE")
+        [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && return 0
+    fi
+    if command -v setsid >/dev/null 2>&1; then
+        setsid "$0" daemon >/dev/null 2>&1 </dev/null &
+    else
+        nohup "$0" daemon >/dev/null 2>&1 </dev/null &
+    fi
+    disown 2>/dev/null
+    return 0
+}
+
+mkdir -p "$CACHE_DIR"
+
+case "${1:-left}" in
+    left)
+        # args: WIDTH
+        ensure_daemon
+        fit_segs "$LEFT_FILE" "$(half_budget "${2:-80}" 1)"
+        ;;
+    right)
+        # args: WIDTH
+        ensure_daemon
+        fit_segs "$RIGHT_FILE" "$(half_budget "${2:-80}" 1)"
+        ;;
+    daemon)
+        run_daemon
+        ;;
+    restart)
+        [[ -r "$PID_FILE" ]] && kill "$(<"$PID_FILE")" 2>/dev/null
+        rm -f "$PID_FILE" "$LEFT_FILE" "$RIGHT_FILE"
+        ensure_daemon
+        # Confirm rather than assume: the replacement can lose the lock race to
+        # a not-quite-dead predecessor, in which case the next status tick
+        # retries. Report what actually happened.
+        for _ in 1 2 3 4 5 6; do
+            [[ -r "$PID_FILE" ]] && kill -0 "$(<"$PID_FILE")" 2>/dev/null && break
+            sleep 1
+        done
+        if [[ -r "$PID_FILE" ]] && kill -0 "$(<"$PID_FILE")" 2>/dev/null; then
+            echo "tmux-sysbar: daemon running (pid $(<"$PID_FILE"))"
+        else
+            echo "tmux-sysbar: daemon not up yet; the next status redraw will start it" >&2
+        fi
+        ;;
+    stop)
+        [[ -r "$PID_FILE" ]] && kill "$(<"$PID_FILE")" 2>/dev/null
+        rm -f "$PID_FILE" "$LEFT_FILE" "$RIGHT_FILE"
+        echo "tmux-sysbar: daemon stopped"
+        ;;
+    rule)
+        # args: WIDTH [SESSION WINDOW_INDEX]
+        render_rule "${2:-80}" "${3-}" "${4-}"
+        ;;
+    once)
+        # Sample synchronously and print both halves — for debugging.
+        resolve_sensors
+        gpu_scan_full
+        sample_cpu; sample_gpu; sleep 1
+        sample_cpu; sample_gpu; sample_mem; sample_thermal; sample_remote
+        render_left_segs  >"$LEFT_FILE"
+        render_right_segs >"$RIGHT_FILE"
+        w=${2:-120}
+        printf 'width %s\n' "$w"
+        printf '  left : %s\n' "$(fit_segs "$LEFT_FILE" "$(half_budget "$w" 1)")"
+        printf '  right: %s\n' "$(fit_segs "$RIGHT_FILE" "$(half_budget "$w" 1)")"
+        ;;
+    *)
+        echo "usage: tmux-sysbar {left|right|rule WIDTH|daemon|restart|stop|once}" >&2
+        exit 2
+        ;;
+esac

@@ -70,7 +70,6 @@ RIGHT_BOT=$(tmux split-window -v -p 80 -t "$RIGHT_TOP" -P -F '#{pane_id}')
 # it correct whether or not the clock pane is enabled.
 OVERVIEW_PANES=$(tmux list-panes -t "$SESSION" -F x 2>/dev/null | wc -l)
 tmux resize-pane -t "$LEFT_TOP" -y $(( OVERVIEW_PANES + 3 ))
-# Pin the clock pane to exactly 7 lines tall.
 tmux resize-pane -t "$RIGHT_TOP" -y 7
 
 # Label these panes so the border shows their purpose, not "bash". The claude

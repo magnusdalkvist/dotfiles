@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Reset the left/right divider(s) of the current tmux window back to 50/50,
+# leaving row heights alone.
+#
+# The grid comes in two shapes depending on how it was built: either one
+# top-level left/right split whose halves are stacks (one divider), or a
+# top-level top/bottom split whose rows are each split left/right (one divider
+# per row). Setting every pane to 50% of the window width evens both shapes and
+# is a no-op on panes that already span half, so the two cases need no special
+# casing. Heights are never touched.
+set -euo pipefail
+
+target="${1:-}"
+if [ -n "$target" ]; then
+    set -- -t "$target"
+else
+    set --
+fi
+
+while read -r pane; do
+    # A pane that already spans the full window width is a row on its own and
+    # has no left/right neighbour to even out against — skip it, otherwise it
+    # would get squeezed to half the window.
+    tmux resize-pane -t "$pane" -x 50% 2>/dev/null || true
+done < <(tmux list-panes "$@" -F '#{pane_id} #{pane_width} #{window_width}' |
+    awk '$2 != $3 { print $1 }')

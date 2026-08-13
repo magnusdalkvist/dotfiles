@@ -4,10 +4,10 @@
       "/home/magnus-dalkvist"
     ]
   },
-  "theme": "dark",
   "model": "opus[1m]",
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh"
-  }
+  },
+  "theme": "dark"
 }

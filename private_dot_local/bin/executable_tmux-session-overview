@@ -130,7 +130,9 @@ LEFT_MARGIN=2          # cells reserved at the left edge for the ‹ scroll mark
 COL_TARGET=25          # desired per-column width; the pane is divided into a
                        # whole number of columns at least this wide
 VIEW_START=0           # absolute index of the leftmost visible session column
+                       # (always the current session — the viewport wraps)
 VISIBLE=0              # number of session columns currently on screen
+NCOLS=1                # total session count, for wrapping the viewport
 MARK_L="‹"             # hidden-sessions-to-the-left marker
 MARK_R="›"             # hidden-sessions-to-the-right marker
 CURRENT_SESSION=""     # this overview's own session (set by build_frame)
@@ -212,7 +214,7 @@ build_frame() {
 
     # A row is: LEFT_MARGIN cells (the ‹ marker), then VISIBLE session columns,
     # each colw wide followed by a GUTTER (3), then one cell for the › marker.
-    local ncols=${#COLS_BLOCKS[@]} pane_w avail fit stride max_start
+    local ncols=${#COLS_BLOCKS[@]} pane_w avail fit stride
     pane_w=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{pane_width}' 2>/dev/null)
     [[ "$pane_w" =~ ^[0-9]+$ ]] || pane_w=$(tput cols 2>/dev/null)
     [[ "$pane_w" =~ ^[0-9]+$ ]] || pane_w=80
@@ -231,15 +233,18 @@ build_frame() {
     colw=$(( avail / fit - 3 )); (( colw < 4 )) && colw=4
 
     stride=$(( colw + 3 ))
+    NCOLS=$ncols
     VISIBLE=$fit
     (( VISIBLE > ncols )) && VISIBLE=$ncols
 
-    # Slide the viewport only as far as needed to keep the current session in it.
-    (( current_idx < VIEW_START )) && VIEW_START=$current_idx
-    (( current_idx >= VIEW_START + VISIBLE )) && VIEW_START=$(( current_idx - VISIBLE + 1 ))
-    max_start=$(( ncols - VISIBLE )); (( max_start < 0 )) && max_start=0
-    (( VIEW_START > max_start )) && VIEW_START=$max_start
-    (( VIEW_START < 0 )) && VIEW_START=0
+    # The viewport ALWAYS starts on the current session, and wraps around the end
+    # of the list — a carousel. So the selected session is permanently the
+    # leftmost column and switching sessions just rotates the others past it,
+    # instead of the selection sliding across the row. Wrapping (rather than
+    # clamping at the last column) keeps every visible slot filled, so the tail
+    # of the list doesn't leave blank columns or reintroduce the jump. Matches
+    # handle_nav, which already cycles modulo the session count.
+    VIEW_START=$current_idx
 
     # Height follows only the VISIBLE columns: the tallest on-screen session sets
     # the row count (session name + its panes). maxrows is recomputed here (over
@@ -247,7 +252,7 @@ build_frame() {
     local vj vci
     maxrows=0
     for (( vj = 0; vj < VISIBLE; vj++ )); do
-        vci=$(( VIEW_START + vj ))
+        vci=$(( (VIEW_START + vj) % ncols ))
         (( ${COL_ROWS[vci]:-0} > maxrows )) && maxrows=${COL_ROWS[vci]}
     done
     (( maxrows < 1 )) && maxrows=1
@@ -258,9 +263,14 @@ build_frame() {
     # lines; the extra row is left blank (cleared by the trailing \033[J).
     FRAME_HEIGHT=$(( maxrows + 2 ))
 
+    # With a wrapping viewport there is always more in both directions once the
+    # list is longer than the screen, so both markers are shown together — they
+    # advertise the ←/→ cycle rather than a hard start/end of the list.
     local hidden_left=0 hidden_right=0
-    (( VIEW_START > 0 )) && hidden_left=1
-    (( VIEW_START + VISIBLE < ncols )) && hidden_right=1
+    if (( ncols > VISIBLE )); then
+        hidden_left=1
+        hidden_right=1
+    fi
 
     # Expose the scroll-marker state for the click handler. › hugs the right edge
     # (one column in, to dodge the last-column wrap); ‹ is always at column 1.
@@ -291,7 +301,7 @@ build_frame() {
                 printf '  '
             fi
             for (( j = 0; j < VISIBLE; j++ )); do
-                ci=$(( VIEW_START + j ))
+                ci=$(( (VIEW_START + j) % ncols ))
                 IFS=$'\x01' read -ra lines <<< "${COLS_BLOCKS[ci]}"
                 cell="$(clip "${lines[r]:-}" "$colw")"
                 pad=$(( colw - $(vislen "$cell") )); (( pad < 0 )) && pad=0
@@ -332,7 +342,8 @@ handle_nav() {
 
 # Map a click at (x, y) — 1-indexed terminal cells — to a tmux target and jump.
 # Columns begin after the LEFT_MARGIN, and only VISIBLE of them are on screen
-# starting at VIEW_START, so the visible column index is offset into the full set.
+# starting at VIEW_START (the current session) and wrapping around the end of the
+# list, so the visible column index is offset — modulo NCOLS — into the full set.
 # Pop the "new session" menu (local grid vs ssh grid) on the client viewing
 # this overview. Mirrors the prefix+N binding in ~/.tmux.conf. The ssh option
 # runs in a popup because its fzf picker needs a TTY.
@@ -374,7 +385,8 @@ handle_click() {
     off=$(( rel - c * stride ))
     (( off >= colw )) && return      # clicked in the gutter between columns
     (( c >= VISIBLE )) && return     # clicked past the last visible column / › marker
-    c=$(( VIEW_START + c ))          # translate to the absolute session index
+    (( NCOLS < 1 )) && return
+    c=$(( (VIEW_START + c) % NCOLS ))   # absolute session index (viewport wraps)
 
     target="${CLICK_MAP["$c:$r"]:-}"
     [[ -z "$target" ]] && return
