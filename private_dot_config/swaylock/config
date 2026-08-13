@@ -3,10 +3,19 @@
 # A blurred screenshot would leak whatever was on screen, which is the wrong
 # default on a work laptop, so this is a flat dark screen with a single ring.
 
-daemonize
 ignore-empty-password
 show-failed-attempts
 indicator-caps-lock
+
+# Keep the ring on screen even before you touch anything. Without this the
+# indicator only appears once you start typing, so the lock screen is an
+# entirely blank rectangle -- which reads as a hung machine rather than as a
+# prompt, and is a good way to talk yourself into a hard reset.
+indicator-idle-visible
+
+# Caps Lock is the most common reason a known-correct password is rejected, and
+# indicator-caps-lock above only shows it while the ring is up -- which is why
+# the ring is now always up.
 
 color=1e1e1e
 

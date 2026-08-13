@@ -96,15 +96,17 @@ exec_always systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESK
 exec_always dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP SWAYSOCK
 exec_always systemctl --user start sway-session.target
 
-# Bar and notifications.
+# Bar and notifications are deliberately NOT started here.
 #
-# The whole shell command MUST be quoted. Unquoted, sway's own command parser
-# claims the `;` as its command separator and tries to run `waybar` as a sway
-# command -- which logs "Unknown/invalid command 'waybar'" and pops the red
-# "errors in your config file" nag on every login. Quoted, sway passes the
-# string to sh untouched.
-exec_always "pkill -x waybar; waybar"
-exec_always "pkill -x swaync; swaync"
+# Ubuntu ships waybar.service and swaync.service already enabled and
+# WantedBy=graphical-session.target, which sway-session.target activates above.
+# Starting them from the config as well produced two of each -- literally two
+# bars stacked at the top of the screen.
+#
+# systemd owns them, so after editing the bar's config or stylesheet a plain
+# reload will not pick it up. Use:
+#     systemctl --user restart waybar
+# or the $mod+Shift+b binding below.
 
 # Tray applets — Slack and Spotify both rely on a tray existing.
 exec nm-applet --indicator
@@ -244,7 +246,18 @@ bindsym $mod+Shift+n     exec swaync-client -d -sw
 
 # --- session
 bindsym $mod+Shift+c     reload
-bindsym $mod+l           exec $lock
+
+# Restart the bar after editing waybar's config or stylesheet. Needed because
+# systemd owns waybar, so a sway reload does not touch it.
+bindsym $mod+Shift+b     exec systemctl --user restart waybar
+
+# Lock. NOT $mod+l: `l` is the vim "right" key above, so $mod+l is already
+# `focus right` and binding it again silently overwrote that -- which is both
+# where the "errors in your config file" warning came from and why reaching for
+# right-focus would lock the screen instead. $mod+Shift+l is out too, since
+# $mod+Shift+<hjkl> moves containers. Ctrl keeps the "l for lock" mnemonic.
+bindsym $mod+Ctrl+l      exec $lock
+bindsym $mod+Escape      exec $lock
 bindsym $mod+Shift+e     exec swaynag -t warning \
     -m 'Exit sway?' \
     -B 'Log out' 'swaymsg exit' \

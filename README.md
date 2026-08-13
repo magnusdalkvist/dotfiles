@@ -66,10 +66,11 @@ Needs a Nerd Font for the bar glyphs; the configs ask for `RobotoMono Nerd Font`
 | `Super+1..9` | Switch workspace (`+Shift` moves the window) |
 | `Super+hjkl` / arrows | Focus (`+Shift` moves) |
 | `Super+R` | Resize mode |
-| `Super+L` | Lock |
+| `Super+Ctrl+L` or `Super+Escape` | Lock — **not** `Super+L`, which is `focus right` |
 | `Print` | Region screenshot into swappy (`Shift` = full, `Super` = to clipboard) |
 | `Super+N` | Notification centre |
 | `Super+Shift+C` | Reload config |
+| `Super+Shift+B` | Restart waybar (systemd owns it, so reload won't) |
 | `Super+Shift+E` | Exit / reboot / suspend menu |
 
 ### Design notes
@@ -86,6 +87,13 @@ Needs a Nerd Font for the bar glyphs; the configs ask for `RobotoMono Nerd Font`
   so without it `vicinae.service` and `gnome-keyring` never start.
 - **cliphist is installed but not started.** vicinae has its own clipboard
   history; running both records every copy twice.
+- **waybar and swaync are started by systemd, not by the sway config.** Ubuntu
+  ships both units already enabled and `WantedBy=graphical-session.target`,
+  which `sway-session.target` activates. Starting them from the config too gives
+  you two of each — two stacked bars.
+- **`$mod+l` is `focus right`, not lock.** `l` is the vim right key, so binding
+  lock there silently overwrites navigation and triggers sway's "errors in your
+  config file" warning. Lock lives on `Super+Ctrl+L` / `Super+Escape`.
 - **Chrome** still runs under XWayland by default. Set
   `chrome://flags#ozone-platform-hint` to *Auto* for native Wayland (smoother
   scrolling, working VAAPI).
