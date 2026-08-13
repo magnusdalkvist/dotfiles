@@ -1,2 +1,16 @@
 # Repo documentation — not a dotfile to deploy to the home directory.
 /README.md
+
+{{- if ne .chezmoi.os "linux" }}
+# The sway desktop is wlroots-based and Linux-only. Deploying it on macOS would
+# just litter ~/.config with configs nothing can read.
+.config/sway
+.config/waybar
+.config/foot
+.config/swaync
+.config/swaylock
+.config/kanshi
+.config/fuzzel
+.config/environment.d
+.config/systemd
+{{- end }}

@@ -1,0 +1,170 @@
+/* waybar — minimal / near-invisible
+ *
+ * The whole design is: no background, no borders, no pills. Text sits directly
+ * on the wallpaper. The one non-obvious necessity is the text-shadow: with a
+ * fully transparent bar, a light wallpaper would swallow light text, so every
+ * label carries a soft dark shadow that keeps it legible over anything without
+ * being visible as an effect.
+ */
+
+@define-color accent  #d56199;
+@define-color text    #deddda;
+@define-color dim     #77767b;
+@define-color urgent  #e01b24;
+@define-color warning #f5c211;
+
+* {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  min-height: 0;
+  font-family: "RobotoMono Nerd Font", "Ubuntu Sans", sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+window#waybar {
+  background: transparent;
+  color: @text;
+  /* Legibility over an arbitrary wallpaper, without drawing a background. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+/* Hide the bar entirely when a window is fullscreen -- video and screen shares
+ * should be genuinely edge to edge. */
+window#waybar.fullscreen {
+  opacity: 0;
+}
+
+/* ------------------------------------------------------------- workspaces */
+
+#workspaces {
+  background: transparent;
+  margin-right: 8px;
+}
+
+#workspaces button {
+  background: transparent;
+  color: @dim;
+  padding: 0 8px;
+  /* Kill GTK's default focus outline, which would otherwise appear as a stray
+   * rectangle the moment the bar is clicked. */
+  outline: none;
+  box-shadow: none;
+  transition: color 150ms ease;
+}
+
+#workspaces button:hover {
+  background: transparent;
+  color: @text;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+/* Colour alone marks the active workspace -- no underline, no box. */
+#workspaces button.focused,
+#workspaces button.visible {
+  color: @accent;
+}
+
+#workspaces button.urgent {
+  color: @urgent;
+}
+
+/* --------------------------------------------------------------- centre */
+
+#mode {
+  color: @accent;
+  padding: 0 8px;
+}
+
+#window {
+  color: @dim;
+  font-weight: 400;
+  font-size: 12px;
+}
+
+/* An empty workspace has no title, and an empty module would still hold its
+ * padding, nudging everything else. */
+window#waybar.empty #window {
+  padding: 0;
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------- right */
+
+#tray,
+#pulseaudio,
+#network,
+#temperature,
+#battery,
+#clock {
+  background: transparent;
+  padding: 0 9px;
+  color: @text;
+}
+
+#clock {
+  color: @text;
+  font-weight: 600;
+  padding-right: 0;
+}
+
+#tray {
+  padding-right: 4px;
+}
+
+#tray menu {
+  /* The tray popup is the one place a real background is required, since it is
+   * a menu and has to be readable as a surface. */
+  background: #2c2c2c;
+  color: @text;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  padding: 4px;
+  text-shadow: none;
+}
+
+#tray > .passive {
+  -gtk-icon-effect: dim;
+}
+
+#tray > .needs-attention {
+  -gtk-icon-effect: highlight;
+  color: @accent;
+}
+
+/* States. Everything is quiet text until something genuinely needs attention,
+ * at which point it turns amber and then pink-red. */
+
+#pulseaudio.muted,
+#network.disconnected {
+  color: @dim;
+}
+
+#temperature.critical,
+#battery.warning {
+  color: @warning;
+}
+
+#battery.critical:not(.charging) {
+  color: @urgent;
+  animation: blink 1.5s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  to {
+    color: @text;
+  }
+}
+
+tooltip {
+  background: #1e1e1e;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+}
+
+tooltip label {
+  color: @text;
+  text-shadow: none;
+  padding: 2px;
+}

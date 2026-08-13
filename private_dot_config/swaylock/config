@@ -1,0 +1,46 @@
+# swaylock — lock screen (Super+L, and automatically at 5 min idle)
+#
+# A blurred screenshot would leak whatever was on screen, which is the wrong
+# default on a work laptop, so this is a flat dark screen with a single ring.
+
+daemonize
+ignore-empty-password
+show-failed-attempts
+indicator-caps-lock
+
+color=1e1e1e
+
+# Ring
+indicator-radius=90
+indicator-thickness=6
+font=Ubuntu Sans
+font-size=20
+
+ring-color=2c2c2c
+inside-color=1e1e1ecc
+text-color=deddda
+
+# Typing
+ring-ver-color=d56199
+inside-ver-color=1e1e1ecc
+text-ver-color=deddda
+key-hl-color=d56199
+bs-hl-color=f5c211
+
+# Verifying
+line-color=00000000
+line-ver-color=00000000
+line-wrong-color=00000000
+line-clear-color=00000000
+
+# Wrong password
+ring-wrong-color=e01b24
+inside-wrong-color=1e1e1ecc
+text-wrong-color=e01b24
+
+# Cleared
+ring-clear-color=f5c211
+inside-clear-color=1e1e1ecc
+text-clear-color=f5c211
+
+separator-color=00000000

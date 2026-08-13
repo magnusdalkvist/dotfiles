@@ -1,0 +1,127 @@
+// waybar — minimal / near-invisible
+//
+// No background, no borders, no separators. Just text floating over the
+// wallpaper. Everything that would normally be a coloured pill is plain text
+// that only picks up the pink accent when it needs attention.
+{
+  "layer": "top",
+  "position": "top",
+  "height": 34,
+  "spacing": 0,
+
+  // Inset from the screen edges so text is not flush against the corners.
+  "margin-top": 4,
+  "margin-left": 12,
+  "margin-right": 12,
+
+  "modules-left": ["sway/workspaces", "sway/mode"],
+  "modules-center": ["sway/window"],
+  "modules-right": [
+    "tray",
+    "pulseaudio",
+    "network",
+    "temperature",
+    "battery",
+    "clock"
+  ],
+
+  "sway/workspaces": {
+    // Numbers only. The active one is pink, the rest are dim -- that contrast
+    // is the entire indicator, no boxes needed.
+    "format": "{name}",
+    "disable-scroll": true,
+    "all-outputs": true
+  },
+
+  "sway/mode": {
+    // Only ever visible while you are in resize mode.
+    "format": "  {}"
+  },
+
+  "sway/window": {
+    // Centre text is deliberately dim and truncated -- present when you need
+    // to know what is focused, invisible the rest of the time.
+    "format": "{title}",
+    "max-length": 60,
+    "rewrite": {
+      "(.*) — Mozilla Firefox": "$1",
+      "(.*) - Google Chrome": "$1",
+      "(.*) - Visual Studio Code": "$1",
+      "(.*) - Slack": "$1"
+    }
+  },
+
+  "tray": {
+    // Slack and Spotify both need this to exist or they have nowhere to live
+    // when closed to tray.
+    "icon-size": 16,
+    "spacing": 12
+  },
+
+  "pulseaudio": {
+    "format": "{icon} {volume}",
+    "format-muted": "󰝟",
+    "format-bluetooth": "󰂯 {volume}",
+    "format-icons": {
+      "headphone": "󰋋",
+      "headset": "󰋎",
+      "default": ["󰕿", "󰖀", "󰕾"]
+    },
+    "on-click": "pavucontrol",
+    "scroll-step": 5
+  },
+
+  "network": {
+    // Icon only while things are fine; the SSID or a warning appears only when
+    // it is actually interesting.
+    "format-wifi": "󰖩",
+    "format-ethernet": "󰈀",
+    "format-linked": "󰈂",
+    "format-disconnected": "󰖪",
+    "tooltip-format-wifi": "{essid}  {signalStrength}%  ({ipaddr})",
+    "tooltip-format-ethernet": "{ifname}  ({ipaddr})",
+    "tooltip-format-disconnected": "Disconnected",
+    "on-click": "nm-connection-editor"
+  },
+
+  "temperature": {
+    // Package id 0 via the device path rather than /sys/class/hwmon/hwmonN,
+    // because the hwmonN numbering is not stable across reboots.
+    "hwmon-path-abs": "/sys/devices/platform/coretemp.0/hwmon",
+    "input-filename": "temp1_input",
+    "critical-threshold": 85,
+    "format": "{temperatureC}°",
+    "format-critical": "󰸁 {temperatureC}°",
+    "interval": 5
+  },
+
+  "battery": {
+    "states": { "warning": 25, "critical": 12 },
+    "format": "{capacity}%",
+    "format-charging": "󰂄 {capacity}%",
+    "format-plugged": "󰚥 {capacity}%",
+    "tooltip-format": "{timeTo}  ({power}W)",
+    "interval": 30
+  },
+
+  "clock": {
+    // en_DK locale, so 24-hour and ISO-ish dates, matching the rest of the system.
+    "format": "{:%H:%M}",
+    "tooltip-format": "<tt><small>{calendar}</small></tt>",
+    "calendar": {
+      "mode": "month",
+      "weeks-pos": "left",
+      "format": {
+        "months": "<span color='#deddda'><b>{}</b></span>",
+        "weeks": "<span color='#77767b'>{}</span>",
+        "weekdays": "<span color='#77767b'><b>{}</b></span>",
+        "today": "<span color='#d56199'><b>{}</b></span>"
+      }
+    },
+    "actions": {
+      "on-click-right": "mode",
+      "on-scroll-up": "shift_up",
+      "on-scroll-down": "shift_down"
+    }
+  }
+}

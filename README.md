@@ -19,6 +19,76 @@ Requires `brew` (macOS) or `apt` (Linux) — the setup scripts handle the rest.
 | `.bash_aliases` | Shared aliases across bash and zsh |
 | `.theme.omp.json` | [oh-my-posh](https://ohmyposh.dev) prompt theme |
 | `.config/nvim` | Neovim config |
+| `.config/sway` etc. | sway desktop, Linux only (see below) |
+
+## sway desktop (Linux only)
+
+An alternative to GNOME, selectable at the GDM login screen — GNOME stays
+installed and nothing here touches it. Skipped entirely on macOS via
+`.chezmoiignore`.
+
+| File | Purpose |
+|------|---------|
+| `.config/sway/config` | Compositor: `dk` keyboard, keybinds, autostart, window rules |
+| `.config/waybar/` | Top bar — transparent, no borders, pink accent |
+| `.config/foot/foot.ini` | Terminal, Adwaita-dark palette |
+| `.config/swaync/` | Notifications and control centre |
+| `.config/swaylock/config` | Lock screen (flat dark, no screenshot blur) |
+| `.config/kanshi/config` | Automatic display profiles, replaces `monitors.xml` |
+| `.config/fuzzel/fuzzel.ini` | Fallback launcher and `dmenu` backend |
+| `.config/environment.d/` | Wayland env vars for Electron/Qt/Firefox |
+| `.config/systemd/user/sway-session.target` | Bridges sway to `graphical-session.target` |
+
+### Packages
+
+```sh
+sudo apt install -y \
+  sway swaybg swayidle swaylock autotiling \
+  waybar foot fuzzel sway-notification-center \
+  grim slurp swappy wl-clipboard cliphist \
+  kanshi wdisplays brightnessctl playerctl \
+  network-manager-gnome blueman \
+  xdg-desktop-portal-wlr xdg-desktop-portal-gtk \
+  mate-polkit nwg-look wlsunset
+```
+
+Needs a Nerd Font for the bar glyphs; the configs ask for `RobotoMono Nerd Font`.
+
+### Key bindings
+
+| Binding | Action |
+|---------|--------|
+| `Super+Space` | vicinae (primary launcher) |
+| `Super+D` | fuzzel (fallback launcher) |
+| `Super+Return` | Terminal |
+| `Super+Q` / `Alt+F4` | Close window |
+| `Super+F` | Fullscreen |
+| `Super+1..9` | Switch workspace (`+Shift` moves the window) |
+| `Super+hjkl` / arrows | Focus (`+Shift` moves) |
+| `Super+R` | Resize mode |
+| `Super+L` | Lock |
+| `Print` | Region screenshot into swappy (`Shift` = full, `Super` = to clipboard) |
+| `Super+N` | Notification centre |
+| `Super+Shift+C` | Reload config |
+| `Super+Shift+E` | Exit / reboot / suspend menu |
+
+### Design notes
+
+- **Bar legibility.** With a fully transparent bar, a light wallpaper would
+  swallow light text, so every label carries a `text-shadow`. It reads as
+  nothing; remove it and the bar becomes unreadable on pale wallpapers.
+- **`control-center-margin-top: 42`** in swaync clears the 34px bar plus its 4px
+  margin, so notifications never overlap the clock.
+- **Temperature sensor** is addressed via
+  `/sys/devices/platform/coretemp.0/hwmon`, not `/sys/class/hwmon/hwmonN` —
+  the `hwmonN` numbering is not stable across reboots.
+- **`sway-session.target`** is not optional. sway knows nothing about systemd,
+  so without it `vicinae.service` and `gnome-keyring` never start.
+- **cliphist is installed but not started.** vicinae has its own clipboard
+  history; running both records every copy twice.
+- **Chrome** still runs under XWayland by default. Set
+  `chrome://flags#ozone-platform-hint` to *Auto* for native Wayland (smoother
+  scrolling, working VAAPI).
 
 ## tmux scripts
 

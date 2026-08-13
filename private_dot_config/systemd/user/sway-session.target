@@ -1,0 +1,15 @@
+[Unit]
+Description=sway compositor session
+Documentation=man:systemd.special(7)
+
+# This unit is the bridge between sway and systemd. sway itself knows nothing
+# about systemd targets, so nothing that expects a desktop session -- vicinae,
+# gnome-keyring, the xdg portals -- would ever start.
+#
+# The sway config runs `systemctl --user start sway-session.target` on launch.
+# BindsTo implies Requires, so that pulls up graphical-session.target, and
+# anything declaring WantedBy=graphical-session.target then activates. It also
+# means the session tears down cleanly when sway exits.
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target

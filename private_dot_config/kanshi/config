@@ -1,0 +1,33 @@
+# kanshi — automatic display profiles
+#
+# Replaces GNOME's monitors.xml. kanshi watches for monitors appearing and
+# disappearing and applies the first profile whose output list matches exactly,
+# so docking and undocking needs no manual step.
+#
+# To add your dock: plug it in, run
+#
+#     swaymsg -t get_outputs | grep -E 'Output|Serial|Make|Model'
+#
+# and copy the real identifier (the "Make Model Serial" string) into a profile
+# below. Identifiers are preferred over connector names like DP-1, because which
+# connector a dock hands you is not stable.
+
+# Laptop only, lid open.
+profile laptop {
+    output eDP-1 enable mode 1920x1200 position 0,0 scale 1
+}
+
+# Lid closed on the dock -- external display only.
+#
+# profile docked-closed {
+#     output eDP-1 disable
+#     output "Dell Inc. DELL U2723QE ABCD123" enable mode 3840x2160 position 0,0 scale 1.5
+# }
+
+# Lid open on the dock -- external above, laptop panel below it. The x offset of
+# 960 roughly centres the 1920-wide panel under a 3840-wide display.
+#
+# profile docked-open {
+#     output "Dell Inc. DELL U2723QE ABCD123" enable mode 3840x2160 position 0,0 scale 1.5
+#     output eDP-1 enable mode 1920x1200 position 960,1440 scale 1
+# }

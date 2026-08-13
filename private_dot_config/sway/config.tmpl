@@ -1,0 +1,265 @@
+# sway configuration
+#
+# Danish keyboard, pink accent to match the Yaru-magenta-dark GTK theme, and
+# vicinae kept on Super+Space so the Raycast muscle memory still works.
+#
+# Reload after edits with Super+Shift+C. A syntax error on reload leaves the
+# running session untouched, so you cannot lock yourself out by editing this.
+
+### ---------------------------------------------------------------- variables
+
+set $mod      Mod4
+set $left     h
+set $down     j
+set $up       k
+set $right    l
+
+set $term     foot
+set $launcher vicinae toggle
+set $menu     fuzzel
+set $lock     swaylock -f
+
+# Yaru-magenta-dark / GNOME pink accent
+set $accent   #d56199
+set $bg       #1e1e1e
+set $surface  #2c2c2c
+set $text     #deddda
+set $dim      #77767b
+set $urgent   #e01b24
+
+### ------------------------------------------------------------------- output
+
+# Reuse the GNOME wallpaper so the desktop looks the same on both sessions.
+# Absolute path via chezmoi, because sway does not expand ~ here. The trailing
+# colour is the fallback if the file is ever missing, so a deleted wallpaper
+# gives you a dark desktop rather than sway failing to parse this line.
+output * bg {{ .chezmoi.homeDir }}/.config/background fill $bg
+
+# Laptop panel. Per-monitor and docked layouts live in ~/.config/kanshi/config.
+output eDP-1 scale 1 position 0 0
+
+### -------------------------------------------------------------------- input
+
+input type:keyboard {
+    # Matches the GNOME input source ('dk'). Without this you get US QWERTY and
+    # every Danish character is in the wrong place.
+    xkb_layout dk
+
+    # Optional, off by default: Caps Lock becomes a second Escape, and
+    # Shift+Caps is the real Caps Lock. Popular with vim/nvim; uncomment if you
+    # want it, since it does change a key you already use.
+    # xkb_options caps:escape_shifted_capslock
+
+    repeat_delay 250
+    repeat_rate 35
+}
+
+input type:touchpad {
+    natural_scroll enabled
+    tap enabled
+    dwt enabled
+    middle_emulation enabled
+    scroll_factor 0.4
+    accel_profile adaptive
+}
+
+### ---------------------------------------------------------------- appearance
+
+# No titlebars. A thin accent border on the focused window is the only chrome,
+# which is what makes a tiling setup read as clean rather than busy.
+default_border pixel 2
+default_floating_border pixel 2
+titlebar_padding 1
+font pango:Ubuntu Sans 11
+
+gaps inner 8
+gaps outer 0
+smart_gaps off
+smart_borders no_gaps
+
+# class                 border   background  text   indicator  child_border
+client.focused          $accent  $accent     $text  $accent    $accent
+client.focused_inactive $surface $surface    $dim   $surface   $surface
+client.unfocused        $bg      $bg         $dim   $bg        $surface
+client.urgent           $urgent  $urgent     $text  $urgent    $urgent
+
+### ------------------------------------------------------------------ autostart
+
+# systemd session integration. Starting sway-session.target pulls in
+# graphical-session.target, which is what actually launches vicinae.service and
+# gnome-keyring. Without this, vicinae would never start on login.
+exec_always systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP SWAYSOCK XCURSOR_THEME XCURSOR_SIZE
+exec_always dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP SWAYSOCK
+exec_always systemctl --user start sway-session.target
+
+# Bar and notifications
+exec_always pkill -x waybar; waybar
+exec_always pkill -x swaync;  swaync
+
+# Tray applets — Slack and Spotify both rely on a tray existing.
+exec nm-applet --indicator
+exec blueman-applet
+
+# Authentication dialogs ("enter your password to..."). Without an agent running
+# these fail silently and the action just never happens.
+exec for p in /usr/lib/mate-polkit/polkit-mate-authentication-agent-1 \
+              /usr/libexec/mate-polkit/polkit-mate-authentication-agent-1; do \
+         [ -x "$p" ] && exec "$p"; \
+     done
+
+# Display profiles (docked vs laptop-only) and dynamic split direction
+exec kanshi
+exec autotiling
+
+# Night light, Copenhagen
+exec wlsunset -l 55.7 -L 12.6
+
+# Idle behaviour: dim to lock at 5 min, screens off at 10, lock before suspend.
+exec swayidle -w \
+    timeout 300  '$lock' \
+    timeout 600  'swaymsg "output * power off"' \
+    resume       'swaymsg "output * power on"' \
+    before-sleep '$lock'
+
+# Clipboard history is handled by vicinae's own clipboard extension, so cliphist
+# is installed but deliberately not started -- running both means every copy
+# gets recorded twice.
+
+### ------------------------------------------------------------------ keybinds
+
+# --- launching
+bindsym $mod+Return      exec $term
+bindsym $mod+space       exec $launcher
+bindsym $mod+d           exec $menu
+bindsym $mod+e           exec nautilus --new-window
+bindsym $mod+b           exec google-chrome
+
+# --- window management
+bindsym $mod+q           kill
+bindsym Alt+F4           kill
+bindsym $mod+f           fullscreen
+bindsym $mod+Shift+space floating toggle
+bindsym $mod+w           layout tabbed
+bindsym $mod+s           layout toggle split
+bindsym $mod+v           split vertical
+bindsym $mod+Shift+v     split horizontal
+bindsym $mod+a           focus parent
+
+# --- focus (vim keys and arrows both work)
+bindsym $mod+$left       focus left
+bindsym $mod+$down       focus down
+bindsym $mod+$up         focus up
+bindsym $mod+$right      focus right
+bindsym $mod+Left        focus left
+bindsym $mod+Down        focus down
+bindsym $mod+Up          focus up
+bindsym $mod+Right       focus right
+
+# --- move
+bindsym $mod+Shift+$left  move left
+bindsym $mod+Shift+$down  move down
+bindsym $mod+Shift+$up    move up
+bindsym $mod+Shift+$right move right
+bindsym $mod+Shift+Left   move left
+bindsym $mod+Shift+Down   move down
+bindsym $mod+Shift+Up     move up
+bindsym $mod+Shift+Right  move right
+
+# --- workspaces
+bindsym $mod+1 workspace number 1
+bindsym $mod+2 workspace number 2
+bindsym $mod+3 workspace number 3
+bindsym $mod+4 workspace number 4
+bindsym $mod+5 workspace number 5
+bindsym $mod+6 workspace number 6
+bindsym $mod+7 workspace number 7
+bindsym $mod+8 workspace number 8
+bindsym $mod+9 workspace number 9
+
+bindsym $mod+Shift+1 move container to workspace number 1
+bindsym $mod+Shift+2 move container to workspace number 2
+bindsym $mod+Shift+3 move container to workspace number 3
+bindsym $mod+Shift+4 move container to workspace number 4
+bindsym $mod+Shift+5 move container to workspace number 5
+bindsym $mod+Shift+6 move container to workspace number 6
+bindsym $mod+Shift+7 move container to workspace number 7
+bindsym $mod+Shift+8 move container to workspace number 8
+bindsym $mod+Shift+9 move container to workspace number 9
+
+bindsym $mod+Tab       workspace back_and_forth
+bindsym $mod+Prior     workspace prev
+bindsym $mod+Next      workspace next
+
+# --- scratchpad (a hidden holding area for one window)
+bindsym $mod+Shift+minus move scratchpad
+bindsym $mod+minus       scratchpad show
+
+# --- resize
+mode "resize" {
+    bindsym $left  resize shrink width  40px
+    bindsym $down  resize grow   height 40px
+    bindsym $up    resize shrink height 40px
+    bindsym $right resize grow   width  40px
+    bindsym Left   resize shrink width  40px
+    bindsym Down   resize grow   height 40px
+    bindsym Up     resize shrink height 40px
+    bindsym Right  resize grow   width  40px
+    bindsym Return mode "default"
+    bindsym Escape mode "default"
+}
+bindsym $mod+r mode "resize"
+
+# --- screenshots (grim + slurp, straight into the swappy editor)
+bindsym Print            exec grim -g "$(slurp -d)" - | swappy -f -
+bindsym Shift+Print      exec grim - | swappy -f -
+bindsym $mod+Print       exec grim -g "$(slurp -d)" - | wl-copy
+
+# --- media and hardware keys
+bindsym --locked XF86AudioRaiseVolume  exec wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+
+bindsym --locked XF86AudioLowerVolume  exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-
+bindsym --locked XF86AudioMute         exec wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
+bindsym --locked XF86AudioMicMute      exec wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle
+bindsym --locked XF86MonBrightnessUp   exec brightnessctl set 5%+
+bindsym --locked XF86MonBrightnessDown exec brightnessctl set 5%-
+bindsym --locked XF86AudioPlay         exec playerctl play-pause
+bindsym --locked XF86AudioNext         exec playerctl next
+bindsym --locked XF86AudioPrev         exec playerctl previous
+
+# --- notifications
+bindsym $mod+n           exec swaync-client -t -sw
+bindsym $mod+Shift+n     exec swaync-client -d -sw
+
+# --- session
+bindsym $mod+Shift+c     reload
+bindsym $mod+l           exec $lock
+bindsym $mod+Shift+e     exec swaynag -t warning \
+    -m 'Exit sway?' \
+    -B 'Log out' 'swaymsg exit' \
+    -B 'Reboot'  'systemctl reboot' \
+    -B 'Suspend' 'systemctl suspend'
+
+# Lid close: lock rather than just blank, since this is a work machine.
+bindswitch --reload --locked lid:on exec $lock
+
+### ------------------------------------------------------------- window rules
+
+# Things that should never be tiled.
+for_window [app_id="pavucontrol"]     floating enable, resize set 900 600
+for_window [app_id="blueman-manager"] floating enable, resize set 700 500
+for_window [app_id="nm-connection-editor"] floating enable
+for_window [app_id="wdisplays"]       floating enable
+for_window [app_id="org.gnome.Nautilus" title="^(Properties|Preferences)"] floating enable
+for_window [window_role="pop-up"]     floating enable
+for_window [window_role="dialog"]     floating enable
+for_window [window_type="dialog"]     floating enable
+
+# Picture-in-picture, so video follows you across workspaces.
+for_window [title="^Picture(-| )in(-| )[Pp]icture$"] \
+    floating enable, sticky enable, resize set 640 360, move position 1250 780
+
+# Slack and Spotify are heavy; give them dedicated workspaces.
+assign [app_id="slack"]   workspace number 8
+assign [class="Slack"]    workspace number 8
+assign [class="Spotify"]  workspace number 9
+
+include /etc/sway/config.d/*
