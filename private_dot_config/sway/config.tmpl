@@ -108,9 +108,18 @@ exec_always systemctl --user start sway-session.target
 #     systemctl --user restart waybar
 # or the $mod+Shift+b binding below.
 
-# Tray applets — Slack and Spotify both rely on a tray existing.
-exec nm-applet --indicator
-exec blueman-applet
+# nm-applet and blueman-applet are deliberately NOT started. Their tray icons
+# come from a dated GTK icon set and their click menus are GTK2-era popups.
+# waybar's own network and bluetooth modules replace both, and clicking those
+# opens a real window (GNOME Settings Wi-Fi / blueman-manager) instead.
+#
+# One consequence worth knowing: nm-applet is also NetworkManager's secret
+# agent. Saved networks keep working because their secrets are already stored,
+# but joining a NEW password-protected network needs a window open that provides
+# its own agent -- which GNOME Settings does. If a connection ever seems to fail
+# silently, that is the reason.
+#
+# The tray module itself stays, because Slack and Cloudflare WARP live in it.
 
 # Authentication dialogs ("enter your password to..."). Without an agent running
 # these fail silently and the action just never happens.
@@ -271,8 +280,13 @@ bindswitch --reload --locked lid:on exec $lock
 
 # Things that should never be tiled.
 for_window [app_id="pavucontrol"]     floating enable, resize set 900 600
-for_window [app_id="blueman-manager"] floating enable, resize set 700 500
+for_window [app_id="blueman-manager"] floating enable, resize set 760 560
 for_window [app_id="nm-connection-editor"] floating enable
+
+# Settings windows opened from the bar. Floating rather than tiled, because
+# clicking a status glyph should feel like opening a panel, not re-splitting
+# whatever you were working in.
+for_window [app_id="org.gnome.Settings"] floating enable, resize set 1000 720
 for_window [app_id="wdisplays"]       floating enable
 for_window [app_id="org.gnome.Nautilus" title="^(Properties|Preferences)"] floating enable
 for_window [window_role="pop-up"]     floating enable

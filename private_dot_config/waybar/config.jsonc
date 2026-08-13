@@ -1,16 +1,21 @@
 // waybar — minimal
 //
-// Design rule: the bar shows only what nothing else on this desktop already
-// shows. Three things were cut on those grounds rather than restyled:
+// Everything sits on the right. There is no workspace indicator: workspaces go
+// unused on this machine, so a permanent "1" was a label for a feature nobody
+// touches. The Super+1..9 bindings still work if that ever changes.
 //
-//   window title  -- sway marks the focused window with a magenta border, so a
-//                    centre label repeated it. Removing it leaves the middle of
-//                    the bar empty, which is what makes it read as calm.
-//   temperature   -- the tmux status bar already reports CPU temp continuously.
-//   network       -- nm-applet sits in the tray and already indicates the
-//                    connection state, so a second wifi glyph said nothing new.
+// Network and bluetooth are waybar's own modules rather than the nm-applet and
+// blueman-applet tray icons, which are drawn from a dated GTK icon set and open
+// GTK2-era popup menus. These are Nerd Font glyphs in the same palette as the
+// rest of the bar, and clicking them opens a real window instead of a menu:
 //
-// What is left is four groups: tray, volume, battery, clock.
+//   network    -> GNOME Settings Wi-Fi. Needs XDG_CURRENT_DESKTOP=GNOME or it
+//                 refuses to start outside GNOME. Verified working under sway.
+//   bluetooth  -> blueman-manager. GNOME Settings' bluetooth panel reports
+//                 "No Bluetooth Found" under sway even though hci0 is present
+//                 and unblocked, so it is deliberately not used here.
+//
+// The tray stays for Slack and Cloudflare WARP, which have nowhere else to live.
 {
   "layer": "top",
   "position": "top",
@@ -21,27 +26,43 @@
   "margin-left": 14,
   "margin-right": 14,
 
-  "modules-left": ["sway/workspaces", "sway/mode"],
+  "modules-left": ["sway/mode"],
   "modules-center": [],
-  "modules-right": ["tray", "pulseaudio", "battery", "clock"],
-
-  "sway/workspaces": {
-    // Numbers only, and only workspaces that exist -- no persistent 1-9 row of
-    // mostly-empty slots. Colour alone marks the active one.
-    "format": "{name}",
-    "disable-scroll": true,
-    "all-outputs": true
-  },
+  "modules-right": ["tray", "bluetooth", "network", "pulseaudio", "battery", "clock"],
 
   "sway/mode": {
-    // Only ever visible while resize mode is active.
+    // Only visible while resize mode is active.
     "format": "{}"
   },
 
   "tray": {
-    // Slack and Cloudflare WARP both live here.
     "icon-size": 15,
     "spacing": 14
+  },
+
+  "bluetooth": {
+    "format-on": "󰂯",
+    "format-off": "󰂲",
+    "format-disabled": "󰂲",
+    // A count only when something is actually connected -- otherwise the glyph
+    // alone says all there is to say.
+    "format-connected": "󰂱 {num_connections}",
+    "tooltip-format": "{controller_alias}",
+    "tooltip-format-connected": "{device_enumerate}",
+    "tooltip-format-enumerate-connected": "{device_alias}",
+    "on-click": "blueman-manager"
+  },
+
+  "network": {
+    // Icon only; the SSID and signal live in the tooltip so the bar stays quiet.
+    "format-wifi": "󰖩",
+    "format-ethernet": "󰈀",
+    "format-linked": "󰈂",
+    "format-disconnected": "󰖪",
+    "tooltip-format-wifi": "{essid}   {signalStrength}%\n{ipaddr}",
+    "tooltip-format-ethernet": "{ifname}\n{ipaddr}",
+    "tooltip-format-disconnected": "Offline",
+    "on-click": "env XDG_CURRENT_DESKTOP=GNOME gnome-control-center wifi"
   },
 
   "pulseaudio": {
@@ -60,8 +81,6 @@
 
   "battery": {
     "states": { "warning": 25, "critical": 12 },
-    // Percentage only at a glance; the icon appears when charging, because that
-    // is the only time the state is not obvious from the number alone.
     "format": "{capacity}%",
     "format-charging": "󰂄 {capacity}%",
     "format-plugged": "󰚥 {capacity}%",

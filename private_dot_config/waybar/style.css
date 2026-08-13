@@ -52,54 +52,21 @@ window#waybar.fullscreen {
   opacity: 0;
 }
 
-/* ------------------------------------------------------------- workspaces */
+/* ----------------------------------------------------------------- left */
 
-#workspaces {
-  background: transparent;
-}
-
-#workspaces button {
-  background: transparent;
-  color: @dim;
-  font-weight: 500;
-  /* Tight, even rhythm: the numbers should read as one row, not as buttons. */
-  padding: 0 7px;
-  margin: 0;
-  outline: none;
-  box-shadow: none;
-  transition: color 150ms ease;
-}
-
-#workspaces button:first-child {
-  padding-left: 0;
-}
-
-#workspaces button:hover {
-  background: transparent;
-  color: @fg;
-}
-
-#workspaces button.focused,
-#workspaces button.visible {
-  color: @accent;
-  font-weight: 700;
-}
-
-#workspaces button.urgent {
-  color: @urgent;
-  font-weight: 700;
-}
-
+/* The only thing on the left, and only while resize mode is active. */
 #mode {
   color: @accent;
   font-weight: 700;
-  padding: 0 12px;
+  padding: 0;
 }
 
 /* ---------------------------------------------------------------- right */
 
-/* One consistent gap between the four groups. Nothing else separates them. */
+/* One consistent gap between groups. Nothing else separates them. */
 #tray,
+#bluetooth,
+#network,
 #pulseaudio,
 #battery,
 #clock {
@@ -107,6 +74,15 @@ window#waybar.fullscreen {
   color: @fg;
   padding: 0 0 0 18px;
   font-weight: 500;
+}
+
+/* Status glyphs are tighter to each other than to the text groups, so network
+ * and bluetooth read as a pair rather than as two separate announcements. */
+#bluetooth,
+#network {
+  color: @dim;
+  padding-left: 13px;
+  font-size: 14px;
 }
 
 /* The clock is the one thing worth emphasising, and it ends the row flush. */
@@ -152,6 +128,16 @@ window#waybar.fullscreen {
 
 #pulseaudio.muted {
   color: @dim;
+}
+
+/* Offline is the one network state worth colouring -- everything else is a
+ * glyph you should be able to ignore. */
+#network.disconnected {
+  color: @urgent;
+}
+
+#bluetooth.connected {
+  color: @fg;
 }
 
 #battery.warning {
