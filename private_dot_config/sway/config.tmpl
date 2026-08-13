@@ -102,8 +102,14 @@ exec blueman-applet
 
 # Authentication dialogs ("enter your password to..."). Without an agent running
 # these fail silently and the action just never happens.
-exec for p in /usr/lib/mate-polkit/polkit-mate-authentication-agent-1 \
-              /usr/libexec/mate-polkit/polkit-mate-authentication-agent-1; do \
+#
+# Verified path on Ubuntu 26.04 is /usr/libexec, with no mate-polkit/
+# subdirectory -- the alternatives are listed only so this survives a package
+# layout change or a different distro.
+exec for p in /usr/libexec/polkit-mate-authentication-agent-1 \
+              /usr/lib/mate-polkit/polkit-mate-authentication-agent-1 \
+              /usr/libexec/mate-polkit/polkit-mate-authentication-agent-1 \
+              /usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1; do \
          [ -x "$p" ] && exec "$p"; \
      done
 
