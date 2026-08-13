@@ -1,7 +1,7 @@
 # sway configuration
 #
-# Danish keyboard, pink accent to match the Yaru-magenta-dark GTK theme, and
-# vicinae kept on Super+Space so the Raycast muscle memory still works.
+# Danish keyboard, a palette sampled from the Børsen wallpaper, and vicinae kept
+# on Super+Space so the Raycast muscle memory still works.
 #
 # Reload after edits with Super+Shift+C. A syntax error on reload leaves the
 # running session untouched, so you cannot lock yourself out by editing this.
@@ -19,9 +19,13 @@ set $launcher vicinae toggle
 set $menu     fuzzel
 set $lock     swaylock -f
 
-# Yaru-magenta-dark / GNOME pink accent
-set $accent   #d56199
-set $bg       #1e1e1e
+# Sampled from the wallpaper (~/.config/background, the Børsen mark) so the
+# desktop reads as one palette. These colour window borders, which are drawn
+# over application windows rather than over the wallpaper, so the full-strength
+# brand magenta is used here. waybar needs a darkened variant instead -- see the
+# contrast note in waybar/style.css.
+set $accent   #ec32a8
+set $bg       #111b22
 set $surface  #2c2c2c
 set $text     #deddda
 set $dim      #77767b
@@ -92,9 +96,15 @@ exec_always systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESK
 exec_always dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP SWAYSOCK
 exec_always systemctl --user start sway-session.target
 
-# Bar and notifications
-exec_always pkill -x waybar; waybar
-exec_always pkill -x swaync;  swaync
+# Bar and notifications.
+#
+# The whole shell command MUST be quoted. Unquoted, sway's own command parser
+# claims the `;` as its command separator and tries to run `waybar` as a sway
+# command -- which logs "Unknown/invalid command 'waybar'" and pops the red
+# "errors in your config file" nag on every login. Quoted, sway passes the
+# string to sh untouched.
+exec_always "pkill -x waybar; waybar"
+exec_always "pkill -x swaync; swaync"
 
 # Tray applets — Slack and Spotify both rely on a tray existing.
 exec nm-applet --indicator
@@ -103,15 +113,12 @@ exec blueman-applet
 # Authentication dialogs ("enter your password to..."). Without an agent running
 # these fail silently and the action just never happens.
 #
-# Verified path on Ubuntu 26.04 is /usr/libexec, with no mate-polkit/
-# subdirectory -- the alternatives are listed only so this survives a package
-# layout change or a different distro.
-exec for p in /usr/libexec/polkit-mate-authentication-agent-1 \
-              /usr/lib/mate-polkit/polkit-mate-authentication-agent-1 \
-              /usr/libexec/mate-polkit/polkit-mate-authentication-agent-1 \
-              /usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1; do \
-         [ -x "$p" ] && exec "$p"; \
-     done
+# A plain path rather than a shell loop over candidates: the loop needed `;`,
+# which sway's parser claimed as its own separator, so it errored on `do` and no
+# agent ever started. This path is verified present on Ubuntu 26.04 (note: no
+# mate-polkit/ subdirectory). If a future package moves it, sway logs the
+# failure rather than silently doing nothing.
+exec /usr/libexec/polkit-mate-authentication-agent-1
 
 # Display profiles (docked vs laptop-only) and dynamic split direction
 exec kanshi

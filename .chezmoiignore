@@ -13,4 +13,6 @@
 .config/fuzzel
 .config/environment.d
 .config/systemd
+.config/gtk-3.0
+.config/gtk-4.0
 {{- end }}
