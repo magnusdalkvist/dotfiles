@@ -1,36 +1,29 @@
-/* waybar — minimal / near-invisible
+/* waybar — minimal
  *
- * The bar has no background of its own; labels sit directly on the wallpaper.
- * That makes the wallpaper's brightness part of the design, not incidental to
- * it, so the palette below is derived from the actual wallpaper
- * (~/.config/background -- the Børsen mark: cream #efddca, magenta #ec32a8,
- * navy #111b22).
- *
- * Every colour here is checked against that cream for WCAG AA (4.5:1):
+ * No background, no borders, no pills, no separators. Labels sit directly on the
+ * wallpaper, so the wallpaper's brightness is part of the design: the palette is
+ * sampled from ~/.config/background (the Børsen mark -- cream #efddca, magenta
+ * #ec32a8, navy #111b22) and every value is checked for WCAG AA against that
+ * cream:
  *
  *   navy    #111b22  13.2:1   primary labels
- *   dim     #565d64   5.0:1   secondary (window title)
+ *   dim     #565d64   5.0:1   secondary
  *   magenta #b31675   4.8:1   active workspace
- *   urgent  #b3261e   4.9:1
- *   warning #7a5c00   4.7:1
  *
- * The magenta is the brand pink darkened deliberately: #ec32a8 as-is is only
- * 2.84:1 on cream and fails outright at this text size.
+ * The brand magenta is used at full strength for sway's window borders but
+ * darkened here, because #ec32a8 on cream is only 2.84:1 and fails as text.
  *
- * IF YOU CHANGE TO A DARK WALLPAPER, swap the three lines marked LIGHT-BG for
- * the LIGHT-BG-DARK values beside them, and flip the text-shadow. A transparent
- * bar cannot adapt on its own -- GTK CSS has no way to sample what is behind it.
+ * ON A DARK WALLPAPER: swap the three values marked SWAP and change the
+ * text-shadow to rgba(0,0,0,0.85). A transparent bar cannot adapt on its own --
+ * GTK CSS has no way to sample what is behind it.
  */
 
-/* LIGHT-BG palette (current). Dark-wallpaper values in the trailing comments. */
-@define-color fg      #111b22;  /* dark wallpaper: #deddda */
-@define-color dim     #565d64;  /* dark wallpaper: #77767b */
-@define-color accent  #b31675;  /* dark wallpaper: #d56199 */
+@define-color fg      #111b22;  /* SWAP dark: #deddda */
+@define-color dim     #565d64;  /* SWAP dark: #8b8f94 */
+@define-color accent  #b31675;  /* SWAP dark: #ec32a8 */
 @define-color urgent  #b3261e;
 @define-color warning #7a5c00;
 
-/* Popups (tooltips, tray menus) carry their own surface, so they are styled as
- * light cards to match the desktop rather than inheriting the bar's colours. */
 @define-color surface        #fbf6f0;
 @define-color surface-border #ddd0bd;
 
@@ -41,19 +34,20 @@
   min-height: 0;
   font-family: "RobotoMono Nerd Font", "Ubuntu Sans", sans-serif;
   font-size: 13px;
-  font-weight: 500;
+  /* Monospace digits, so the clock and battery do not shuffle their neighbours
+   * sideways every time a digit changes width. */
+  font-feature-settings: "tnum";
 }
 
 window#waybar {
   background: transparent;
   color: @fg;
-  /* Light halo, so labels stay crisp if the wallpaper darkens under the bar.
-   * On a dark wallpaper this must become rgba(0,0,0,0.85). */
+  /* Light halo; keeps labels crisp if the wallpaper darkens under the bar.
+   * Invisible as an effect, load-bearing for legibility. */
   text-shadow: 0 1px 2px rgba(255, 255, 255, 0.6);
 }
 
-/* Fullscreen should be genuinely edge to edge -- video and screen shares
- * especially. */
+/* Fullscreen means fullscreen -- video and screen shares especially. */
 window#waybar.fullscreen {
   opacity: 0;
 }
@@ -62,18 +56,22 @@ window#waybar.fullscreen {
 
 #workspaces {
   background: transparent;
-  margin-right: 8px;
 }
 
 #workspaces button {
   background: transparent;
   color: @dim;
-  padding: 0 8px;
-  /* Suppress GTK's focus outline, which otherwise appears as a stray rectangle
-   * the first time the bar is clicked. */
+  font-weight: 500;
+  /* Tight, even rhythm: the numbers should read as one row, not as buttons. */
+  padding: 0 7px;
+  margin: 0;
   outline: none;
   box-shadow: none;
   transition: color 150ms ease;
+}
+
+#workspaces button:first-child {
+  padding-left: 0;
 }
 
 #workspaces button:hover {
@@ -81,7 +79,6 @@ window#waybar.fullscreen {
   color: @fg;
 }
 
-/* Colour alone marks the active workspace -- no underline, no pill. */
 #workspaces button.focused,
 #workspaces button.visible {
   color: @accent;
@@ -93,47 +90,38 @@ window#waybar.fullscreen {
   font-weight: 700;
 }
 
-/* --------------------------------------------------------------- centre */
-
 #mode {
   color: @accent;
   font-weight: 700;
-  padding: 0 8px;
-}
-
-#window {
-  color: @dim;
-  font-weight: 400;
-  font-size: 12px;
-}
-
-/* An empty workspace has no title, and an empty module would still hold its
- * padding, shifting everything else along. */
-window#waybar.empty #window {
-  padding: 0;
-  margin: 0;
+  padding: 0 12px;
 }
 
 /* ---------------------------------------------------------------- right */
 
+/* One consistent gap between the four groups. Nothing else separates them. */
 #tray,
 #pulseaudio,
-#network,
-#temperature,
 #battery,
 #clock {
   background: transparent;
-  padding: 0 9px;
   color: @fg;
+  padding: 0 0 0 18px;
+  font-weight: 500;
 }
 
+/* The clock is the one thing worth emphasising, and it ends the row flush. */
 #clock {
   font-weight: 700;
   padding-right: 0;
 }
 
+#pulseaudio,
+#battery {
+  color: @dim;
+}
+
 #tray {
-  padding-right: 4px;
+  padding-left: 0;
 }
 
 #tray menu {
@@ -159,14 +147,13 @@ window#waybar.empty #window {
   color: @accent;
 }
 
-/* States. Quiet by default; colour only when something needs attention. */
+/* States. Everything sits in the quiet secondary tone until it matters, at
+ * which point it steps up to full contrast and then to colour. */
 
-#pulseaudio.muted,
-#network.disconnected {
+#pulseaudio.muted {
   color: @dim;
 }
 
-#temperature.critical,
 #battery.warning {
   color: @warning;
   font-weight: 700;
